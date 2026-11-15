@@ -642,10 +642,14 @@ setInterval(function () {
   players.forEach(function (p) { const prof = save.profiles[p.key]; if (prof && (!prof.quests || prof.quests.day !== day)) sendMe(p); });
 }, 60000);
 
-server.on('error', function (e) { // most often: the port is already in use by another copy of the game
-  console.error('\n  The game server could not start: ' + e.message + '\n');
+// Most often: the port is already in use by another copy of the game. The "ws" library passes the web
+// server's error on to wss first, so both need a listener, or the error is swallowed and the process hangs.
+function failStart(e) {
+  console.error('\n  The game server could not start: ' + (e.code === 'EADDRINUSE' ? 'port ' + PORT + ' is already in use. Is the game already running in another window?' : e.message) + '\n');
   process.exit(1);
-});
+}
+wss.on('error', failStart);
+server.on('error', failStart);
 server.listen(PORT, '0.0.0.0', function () {
   console.log('');
   console.log('  Family Town  [' + VERSION + ']  is running.');

@@ -90,7 +90,24 @@ Tested in a cloud Linux sandbox with headless Chrome and two or three simulated 
 6. **Car racing** in or next to the playground, using the designed cars.
 7. Ideas raised but not scheduled: a shop that spends stars, avatar accessories bought with stars, daily gift / lucky spin, sticker album, boss levels, two difficulty levels (easier for the 6-year-old, harder for the 8-year-old), a "save code" to move progress, wrapping the web game as an APK, moving the server to a cloud host so the laptop need not stay on.
 
-## 8. Practical notes
+## 8. Since the handoff (state on the evening of 2026-11-15)
+
+Sections 4 to 7 describe release v1. This is what changed in Claude Code on the same day.
+
+- **Git and Windows.** The folder is a git repository. The game runs on the Windows laptop, including `start-live.bat`.
+- **v2:** pinyin is drawn in the device font, because Fredoka misdraws `ī`.
+- **v3 (live):** the growth system (levels, daily quests, daily chest, shop inside Dress-Up and the Car Garage), synthesised sound and music, and the town redrawn in 2.5D (`scene.js`).
+- **After v3, in `dev/` and committed, not released:**
+  - Word learning removed at the owner's request: no word card or read-aloud after a star, no "listen to words" quest. Three-language names stay on quests, shop items and the guessing game. Maths stays inside play.
+  - Games are now plug-in modules (`docs/GAME-MODULES.md`): `dev/games/<id>.js` + `dev/public/games/<id>.js`.
+  - The town is 1000 wider, with four new buildings on the east side.
+  - Seven games, each built by its own agent and reviewed afterwards: Pet Home, Race Track, Obby Tower, Monster Cave, Monopoly, Escape Room, Home Street. `docs/GAME-PLAN.md` says what each one is.
+- **Tested:** each game has a protocol test of its own (63 to 146 checks, all passing with every game loaded), and each was opened and played briefly in a desktop browser at 1280x800, some also at 800x480.
+- **Not tested:** anything on the real Honor tablets (touch, speed, sound), a full session of every game from start to finish by real people, more than a few simulated players at once, and how the star rewards of seven games balance against the shop prices.
+- **Known small problems reported by the builders:** crowded name tags with five or more players at 800x480 (Escape Room, Race Track); the BOOST button covers the end of the two near lanes at 800x480; solo Monopoly with two robots lasts about 5 minutes; dragging items by touch in Home Street must start sideways (tap-then-tap always works); in Pet Home at 800x480 an open panel covers most of the Back to town button (the panel has its own close button).
+- The backlog in section 7 is done except the unscheduled ideas in item 7.
+
+## 9. Practical notes
 
 - One-time setup on the laptop: install Node.js LTS, allow Node through Windows Firewall on Private networks, reserve a fixed IP for the laptop in the router.
 - `start-live` prints the address for the tablets (`http://<laptop-ip>:3000`).

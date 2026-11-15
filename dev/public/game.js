@@ -313,7 +313,8 @@
   var toastTimer = null;
   function toast(msg) {
     var el = $('toast'); el.textContent = msg; el.hidden = false;
-    clearTimeout(toastTimer); toastTimer = setTimeout(function () { el.hidden = true; }, 3600);
+    el.classList.toggle('low', !!GAMES[room]); // inside a game: small and at the bottom edge, out of the way of the play
+    clearTimeout(toastTimer); toastTimer = setTimeout(function () { el.hidden = true; }, GAMES[room] ? 2600 : 3600);
   }
 
   // reading a word aloud in three languages (used by the guessing game)
@@ -810,6 +811,8 @@
     }
     if (celebQ.length >= 3) return;
     celebQ.push(o);
+    // In the middle of a race or a boss fight the big card would cover the play: a small notice now, the card back in town.
+    if (GAMES[room]) { if (o.kind === 'level') { toast('Level ' + o.lv + '! 🎉'); sfx('levelup'); } return; }
     if (!celebNow) nextCeleb();
   }
   function itemOf(id) { return shop && shop.items && shop.items[id] ? shop.items[id] : null; }
@@ -929,7 +932,11 @@
     room: function () { return room; },
     // go into the game's own room (hides the town and its buttons) and back out to the town
     enter: function (id) { room = id; joy = null; keys = {}; $('emotes').hidden = true; send({ t: 'room', room: id }); $('hud').hidden = true; },
-    leave: function () { if (room === 'town') return; room = 'town'; keys = {}; send({ t: 'room', room: 'town' }); $('hud').hidden = false; },
+    leave: function () {
+      if (room === 'town') return;
+      room = 'town'; keys = {}; send({ t: 'room', room: 'town' }); $('hud').hidden = false; $('toast').hidden = true;
+      if (!celebNow && celebQ.length) nextCeleb(); // the level-up card that waited while the game was on
+    },
     // a name in three languages, pinyin in the device font: three({ en, zh, py, ms })
     three: function (o) { return '<b>' + esc(o.en) + '</b> · ' + esc(o.zh) + ' <span class="py">' + esc(o.py) + '</span> · ' + esc(o.ms); },
     // draws a player the way they look in town, feet at (x, y); o = { scale, facing: 1|-1, moving, car: true to draw their car }

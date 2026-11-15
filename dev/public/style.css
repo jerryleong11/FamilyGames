@@ -76,6 +76,7 @@ h1, h2, p { margin: 0; }
 .py { font-family: system-ui, 'Segoe UI', Roboto, 'Noto Sans', Arial, sans-serif; }
 
 .toast { position: fixed; left: 50%; bottom: 130px; transform: translateX(-50%); z-index: 40; background: #1B2A49; color: #fff; border: 3px solid #fff; border-radius: 999px; padding: 12px 22px; font-size: 20px; font-weight: 600; max-width: 90vw; text-align: center; pointer-events: none; }
+.toast.low { bottom: 10px; padding: 7px 16px; font-size: 16px; border-width: 2px; }
 .lost { position: fixed; left: 0; right: 0; top: 0; z-index: 50; background: #B3122F; color: #fff; text-align: center; padding: 12px; font-size: 20px; font-weight: 700; }
 
 .studio { background: #FFF3D6; display: flex; gap: 12px; padding: 12px; }

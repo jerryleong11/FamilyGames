@@ -8,8 +8,8 @@
 
 ## Principles
 
-1. **Together first.** No single-player modes. Every activity works with 2 to 8 players.
-2. **Learning hides inside play.** English, 中文 (with pinyin) and Bahasa Malaysia appear as part of the reward or the puzzle, never as a quiz that blocks the fun. There is no "switch game language" setting.
+1. **Together first.** Every activity works with 2 to 8 players and can also be started by one child alone (robots or solo modes fill in).
+2. **Maths hides inside play; no word learning.** Prices, sums, counting and change are part of the games, never a quiz that blocks the fun. Word and vocabulary learning (the word cards) was removed at the owner's request on 2026-11-15. Names of quests, items, pets and the guessing words are still shown in English, 中文 (with pinyin) and Bahasa Malaysia, as labels. There is no "switch game language" setting.
 3. **Collect, customise, create.** The hooks that make Roblox games sticky: things to earn, a look of your own, things you made on show.
 4. **One shared currency.** Stars earned anywhere count everywhere, and feed a family goal.
 5. **Short sessions.** Every activity is fun within two minutes.
@@ -35,16 +35,27 @@ One small town that everyone walks around. Buildings are doors into games. Close
 
 Saves (name, look, car, stars, gallery) live on the laptop, so progress survives a tablet restart.
 
-## Roadmap
+## What came after phase 1
 
-| Phase | Building | Idea |
-|---|---|---|
-| 2 | **Pet Home (养宠物)** | Hatch eggs into pets, feed, wash and dress them; pets follow you in town; visit each other's pet rooms. Word question to hatch an egg. |
-| 3 | **Monopoly (大富翁)** | One board, everyone on their own device, turns in real time. Buy shops, pay rent. Money maths: adding, subtracting, change. |
-| 4 | **Escape Room** | Co-op puzzles where each player sees different clues and must talk to solve them. Word, number and pattern locks. |
-| 5 | **Build Plot + car racing** | Decorate your own house and garden with stars; race the cars designed in the Garage on a track. |
+| Release | What it added |
+|---|---|
+| v2 | Pinyin tone marks drawn correctly. |
+| v3 | **Growth system**: levels from stars earned, three daily quests, a daily chest with legendary finds, a shop inside Dress-Up and the Car Garage. **Sound**: effects and music synthesised in code. **2.5D town**. |
+| v4 (built, see `docs/HANDOFF.md` for its state) | Word cards removed. A wider town. Seven games as plug-in modules (`docs/GAME-MODULES.md`), each behind its own building: |
 
-Each phase is released on its own and stays playable.
+| Building | Game |
+|---|---|
+| **Pet Home (养宠物)** | Buy eggs, hatch them by earning stars, about 14 pets with rarity, feed / play / wash, pets grow and follow you in town, a collection book, trading. |
+| **Race Track** | Side-view lane racing with the cars from the Car Garage; robots fill the grid; three tracks; best times. |
+| **Obby Tower** | A jumping obstacle tower in an Easy and a Hard version, with checkpoints and best times. |
+| **Monster Cave** | Co-op boss fight: carry number orbs to the cannon so they add up to the number on the boss's shield. Three bosses, three difficulties. |
+| **Monopoly (大富翁)** | A 24-space town board, robots, paying rent with notes and getting change, 10 rounds. |
+| **Escape Room** | Four rooms per run from ten puzzle kinds; each tablet holds different clues, so the family has to talk. |
+| **Home Street** | Your own house and garden: buy and place items, visit each other, give hearts. |
+
+## Ideas not built yet
+
+A shop for avatar accessories, a lucky spin, a sticker album, moving a save with a "save code", wrapping the web game as an APK, a cloud server so the laptop need not stay on.
 
 ## Difficulty
 
