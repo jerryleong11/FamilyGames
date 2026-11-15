@@ -21,7 +21,10 @@ family-town/
     words.js         word list (EN / 中文 / pinyin / BM)
     shop.js          growth data: level thresholds, shop catalogue, daily quest pool
     public/          index.html, style.css, game.js, design-dress.js, design-car.js, sound.js,
-                     scene.js (the 2.5D town scenery: buildings, ground, trees, stars)
+                     scene.js (the 2.5D town scenery: buildings, ground, trees, stars),
+                     map.js (mini map, big map and guide arrow; registers as FTGames.map, no server part),
+                     games/<id>.js (client half of each game module)
+    games/<id>.js    server half of each game module (docs/GAME-MODULES.md)
   releases/v1, v2..  frozen copies made by the release tool (+ version.json)
   live.json          which release the kids' server runs: {"version":"v3","previous":"v2"}
   data/live/         kids' saves and gallery (never touched by a release)

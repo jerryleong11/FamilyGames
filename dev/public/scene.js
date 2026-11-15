@@ -56,7 +56,8 @@
 
   // ---------- sprite cache: static things are drawn once, then reused as pictures ----------
   var cache = {}, RES = 1, fontOk = 0;
-  function setRes(r) { r = Math.max(0.75, Math.min(2.5, Math.ceil(r * 4) / 4)); if (r !== RES) { RES = r; cache = {}; } }
+  // The sharpness of the sprites follows the zoom, capped at 2 so zooming in does not eat an old tablet's memory.
+  function setRes(r) { r = Math.max(0.75, Math.min(2, Math.ceil(r * 4) / 4)); if (r !== RES) { RES = r; cache = {}; } }
   // (x, y) = top-left corner in the world, (w, h) = size in world units; draw(g) paints with (0,0) at that corner
   function sprite(c, key, x, y, w, h, draw) {
     var s = cache[key];

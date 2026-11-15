@@ -33,6 +33,7 @@ node_modules/ws     shared by dev and all releases
 - Touch first: every control at least 48px, usable in landscape from 800x480 up to 1280x800.
 - Visual style: Fredoka font, navy `#1B2A49` outlines 3-4px, cream `#FFF3D6` panels, yellow `#FFD66B` primary buttons, pill buttons. Reuse classes in `dev/public/style.css`. Panels and buttons are flat; the town is 2.5D.
 - Town scenery lives in `dev/public/scene.js` (`window.Scene`): light from the top left, a darker side face on anything that stands up (`DX`/`DY` give the depth direction), a soft shadow on the ground to the right. Static things are drawn once into cached sprites (`sprite()`); only moving things are drawn every frame.
+- The town can be zoomed (two-finger pinch or mouse wheel, `zoom` in `game.js`, remembered per device). `dev/public/map.js` draws the mini map, the big map (who is in which area) and the guide arrow; it uses the same client `api` as the game modules.
 - Sound goes through `window.Sfx` in `dev/public/sound.js` (`Sfx.play('star')`), all synthesised, no audio files. Guard calls with `if (window.Sfx)`.
 - Growth data (level thresholds, shop items with prices, the daily quest pool) lives in `dev/shop.js`; the server owns stars, levels, purchases and quest progress. New saves fields are only ever added, never renamed.
 - Pinyin is always wrapped in `<span class="py">` (device font): Fredoka misdraws `ī`.

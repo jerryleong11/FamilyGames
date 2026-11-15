@@ -26,6 +26,9 @@
   var look = { name: '', color: COLORS[0], hat: 0, big: false };
   var tag = { on: false, it: 0, ends: 0 };
   var keys = {}, joy = null;
+  // Zoom of the town: two fingers pinch it, the mouse wheel does it on the laptop. Remembered on this device.
+  var ZOOM_MIN = 0.45, ZOOM_MAX = 1.8, zoom = clamp(parseFloat(store('ft_zoom')) || 1, ZOOM_MIN, ZOOM_MAX);
+  var fingers = {}, pinch = null, sharp = 0, sharpTimer = null; // sharp: the zoom the scenery sprites were last drawn for
   var sent = { x: 0, y: 0, m: 0, f: 1, t: 0 };
   // growth system: the shop catalogue (from "welcome") and this player's own numbers (from "me")
   var shop = null, meState = null, buyWait = {}, gotList = false, famKnown = false;
@@ -466,25 +469,51 @@
   function resize() {
     dpr = Math.min(2, window.devicePixelRatio || 1); W = window.innerWidth; H = window.innerHeight;
     town.width = Math.round(W * dpr); town.height = Math.round(H * dpr);
+    sharp = 0;
     fitPaper();
   }
   window.addEventListener('resize', resize);
   window.addEventListener('keydown', function (e) { if (e.target && e.target.tagName === 'INPUT') return; keys[e.key.toLowerCase()] = true; });
   window.addEventListener('keyup', function (e) { keys[e.key.toLowerCase()] = false; });
-  window.addEventListener('blur', function () { keys = {}; joy = null; });
+  window.addEventListener('blur', function () { keys = {}; joy = null; fingers = {}; pinch = null; });
+  function setZoom(z) {
+    z = clamp(z, ZOOM_MIN, ZOOM_MAX);
+    if (z === zoom) return;
+    zoom = z;
+    // redrawing every sprite on each step of a pinch would stutter: keep the old ones until the fingers rest
+    clearTimeout(sharpTimer); sharpTimer = setTimeout(function () { sharp = 0; store('ft_zoom', zoom.toFixed(2)); }, 250);
+  }
+  function spread() { // distance between the two fingers on the town
+    var ids = Object.keys(fingers), a = fingers[ids[0]], b = fingers[ids[1]];
+    return Math.max(20, Math.sqrt((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y)));
+  }
   town.addEventListener('pointerdown', function (e) {
     $('emotes').hidden = true;
-    if (joy || !joined) return;
-    joy = { id: e.pointerId, ox: e.clientX, oy: e.clientY, dx: 0, dy: 0 };
+    if (!joined) return;
+    fingers[e.pointerId] = { x: e.clientX, y: e.clientY };
     try { town.setPointerCapture(e.pointerId); } catch (err) {}
+    if (Object.keys(fingers).length === 2) { joy = null; pinch = { d: spread(), z: zoom }; return; } // a second finger: pinch, the joystick lets go
+    if (joy || pinch) return;
+    joy = { id: e.pointerId, ox: e.clientX, oy: e.clientY, dx: 0, dy: 0 };
   });
   town.addEventListener('pointermove', function (e) {
+    if (fingers[e.pointerId]) { fingers[e.pointerId].x = e.clientX; fingers[e.pointerId].y = e.clientY; }
+    if (pinch) { if (Object.keys(fingers).length === 2) setZoom(pinch.z * spread() / pinch.d); return; }
     if (!joy || e.pointerId !== joy.id) return;
     var dx = (e.clientX - joy.ox) / 60, dy = (e.clientY - joy.oy) / 60, l = Math.sqrt(dx * dx + dy * dy);
     if (l > 1) { dx /= l; dy /= l; }
     joy.dx = dx; joy.dy = dy;
   });
-  function joyEnd(e) { if (joy && e.pointerId === joy.id) joy = null; }
+  function joyEnd(e) {
+    delete fingers[e.pointerId];
+    if (pinch && Object.keys(fingers).length < 2) pinch = null; // the finger still down does not turn into a joystick
+    if (joy && e.pointerId === joy.id) joy = null;
+  }
+  town.addEventListener('wheel', function (e) {
+    if (!joined || room !== 'town') return;
+    e.preventDefault();
+    setZoom(zoom * (e.deltaY < 0 ? 1.1 : 1 / 1.1));
+  }, { passive: false });
   town.addEventListener('pointerup', joyEnd); town.addEventListener('pointercancel', joyEnd);
   // true when another screen (a designer, the gallery) sits on top of the town
   function covered() { var el = document.elementFromPoint(8, Math.round(H * 0.6)); return !!el && el !== town; }
@@ -537,6 +566,7 @@
     ctx.fillStyle = '#4FA05A'; ctx.fillRect(0, 0, W, H);
     if (!joined || !world || room !== 'town') return;
     var scale = Math.max(H / 880, 0.7); if (W / scale < 700) scale = W / 700;
+    scale *= zoom;
     var vw = W / scale, vh = H / scale;
     var cx = vw >= world.w ? (world.w - vw) / 2 : clamp(my.x - vw / 2, 0, world.w - vw);
     var cy = vh >= world.h ? (world.h - vh) / 2 : clamp(my.y - vh * 0.56, 0, world.h - vh);
@@ -544,7 +574,8 @@
     c.setTransform(dpr * scale, 0, 0, dpr * scale, -cx * dpr * scale, -cy * dpr * scale);
 
     var view = { x: cx, y: cy, w: vw, h: vh }, st = { family: family, tag: tag.on }, i;
-    Scene.setRes(dpr * scale);
+    if (!sharp) sharp = scale;
+    Scene.setRes(dpr * sharp);
     Scene.ground(c, world, view, t, st);
 
     // everything that can overlap, sorted from back to front
