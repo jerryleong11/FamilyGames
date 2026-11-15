@@ -106,6 +106,22 @@ Sections 4 to 7 describe release v1. This is what changed in Claude Code on the 
 - **Not tested:** anything on the real Honor tablets (touch, speed, sound), a full session of every game from start to finish by real people, more than a few simulated players at once, and how the star rewards of seven games balance against the shop prices.
 - **Known small problems reported by the builders:** crowded name tags with five or more players at 800x480 (Escape Room, Race Track); the BOOST button covers the end of the two near lanes at 800x480; solo Monopoly with two robots lasts about 5 minutes; dragging items by touch in Home Street must start sideways (tap-then-tap always works); in Pet Home at 800x480 an open panel covers most of the Back to town button (the panel has its own close button).
 - The backlog in section 7 is done except the unscheduled ideas in item 7.
+- **v4 (released):** everything in the list above.
+- **v5 (released, live):** pinch zoom of the town and the town map (`map.js`): mini map, big map with each person's area, guide arrow.
+
+### Paused work: a boy in Dress-Up (paused 2026-11-15 on the owner's request)
+
+The owner asked for a boy to choose in Dress-Up. It is half done and NOT released.
+
+- **Done, on `main`, tested (15 server checks):** the boy's shop items and prices in `dev/shop.js`, the boy's free fallback look (`FREE.outfitBoy`, used by `enforce` in `dev/server.js` when an outfit has `body: 1`), and `game.js` showing boy items on the boy in the level-up card.
+- **Half done, on the branch `wip-boy-dress-up`:** `dev/public/design-dress.js` only. About 480 lines were added by an agent that was stopped mid-task; it passes a syntax check but was never reviewed or looked at in a browser. `main` still has the last released version of that file, so `main` is safe to release as it is.
+- **To resume:** `git checkout wip-boy-dress-up -- dev/public/design-dress.js`, then finish, test and review it, and commit it on `main`. The branch can be deleted afterwards.
+- **The specification the drawing must meet:**
+  - New design key `body`: 0 girl (also when missing), 1 boy. Same proportions and anchor points as the girl.
+  - Appended option values, never renumbered: `hair` 6 Short, 7 Spiky, 8 Side part, 9 Curly top, 10 Buzz cut, 11 Quiff; `dress` 6 T-shirt and shorts, 7 Hoodie and jeans, 8 Football kit, 9 Superhero suit, 10 Knight armour, 11 Astronaut suit; `head` 6 Cap, 7 Knight helmet, 8 Headphones; `back` 4 Backpack, 5 Jetpack; `item` 5 Football, 6 Sword, 7 Toy robot.
+  - `defaults(1)` gives the boy starter look from free options only: hair 6, dress 6, head 0, back 0, item 5.
+  - A Girl / Boy switch at the top of the designer applies that body's starter look; each list shows the chosen body's typical options first; "Surprise me" picks from them. All options stay open to both bodies.
+  - Every existing option must draw exactly as before (saved outfits), and the shop logic in the file must keep working.
 
 ## 9. Practical notes
 

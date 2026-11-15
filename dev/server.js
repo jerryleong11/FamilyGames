@@ -162,9 +162,10 @@ function growProfile(prof) {
 // A design may only use options the player owns; anything else is swapped for the free option.
 function enforce(kind, d, prof) {
   if (!d || !prof) return d;
-  Object.keys(SHOP.FREE[kind]).forEach(function (k) {
+  const free = kind === 'outfit' && d.body === 1 ? SHOP.FREE.outfitBoy : SHOP.FREE[kind];
+  Object.keys(free).forEach(function (k) {
     const id = kind + '.' + k + '.' + d[k];
-    if (SHOP.ITEMS[id] && !owns(prof, id)) d[k] = SHOP.FREE[kind][k];
+    if (SHOP.ITEMS[id] && !owns(prof, id)) d[k] = free[k];
   });
   return d;
 }

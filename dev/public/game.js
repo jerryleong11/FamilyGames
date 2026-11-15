@@ -852,7 +852,11 @@
     var q = String(id).split('.'), val = parseInt(q[2], 10), c, d;
     try {
       c = cv.getContext('2d'); c.setTransform(2, 0, 0, 2, 0, 0); c.clearRect(0, 0, 160, 130);
-      if (q[0] === 'outfit' && Dress) { d = Dress.defaults(); d[q[1]] = val; Dress.draw(c, 80, 124, d, { scale: 1.05, t: 0 }); }
+      if (q[0] === 'outfit' && Dress) {
+        // the boy's things (the option values added after the girl's) are shown on the boy
+        var boyish = (q[1] === 'dress' && val >= 6) || (q[1] === 'head' && val >= 6) || (q[1] === 'back' && val >= 4) || (q[1] === 'item' && val >= 5);
+        d = Dress.defaults(boyish ? 1 : 0); d[q[1]] = val; Dress.draw(c, 80, 124, d, { scale: 1.05, t: 0 });
+      }
       else if (q[0] === 'car' && Car) { d = Car.defaults(); d[q[1]] = val; Car.draw(c, 80, 112, d, { scale: 1, t: 0 }); }
     } catch (e) {}
   }

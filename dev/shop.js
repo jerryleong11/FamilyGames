@@ -38,6 +38,16 @@ const ITEMS = {
   'outfit.item.3': { cost: 25, lv: 2, rare: 1, en: 'Teddy', zh: '小熊', py: 'xiǎoxióng', ms: 'patung beruang' },
   'outfit.item.1': { cost: 45, lv: 4, rare: 1, en: 'Star wand', zh: '星星魔法棒', py: 'xīngxing mófǎbàng', ms: 'tongkat sakti bintang' },
   'outfit.item.4': { chest: true, rare: 3, en: 'Magic staff', zh: '魔法杖', py: 'mófǎzhàng', ms: 'tongkat ajaib' },
+  // Dress-Up: the boy's side (T-shirt and shorts, hoodie and jeans, the cap, backpack and football are free)
+  'outfit.dress.8': { cost: 20, lv: 2, rare: 0, en: 'Football kit', zh: '足球服', py: 'zúqiú fú', ms: 'jersi bola sepak' },
+  'outfit.dress.11': { cost: 40, lv: 4, rare: 1, en: 'Astronaut suit', zh: '宇航服', py: 'yǔhángfú', ms: 'sut angkasawan' },
+  'outfit.dress.9': { cost: 50, lv: 5, rare: 2, en: 'Superhero suit', zh: '超级英雄服', py: 'chāojí yīngxióng fú', ms: 'sut adiwira' },
+  'outfit.dress.10': { cost: 80, lv: 7, rare: 2, en: 'Knight armour', zh: '骑士盔甲', py: 'qíshì kuījiǎ', ms: 'baju besi kesatria' },
+  'outfit.head.8': { cost: 25, lv: 2, rare: 1, en: 'Headphones', zh: '耳机', py: 'ěrjī', ms: 'fon kepala' },
+  'outfit.head.7': { cost: 35, lv: 3, rare: 1, en: 'Knight helmet', zh: '骑士头盔', py: 'qíshì tóukuī', ms: 'topi besi kesatria' },
+  'outfit.back.5': { cost: 70, lv: 6, rare: 2, en: 'Jetpack', zh: '喷气背包', py: 'pēnqì bēibāo', ms: 'pek jet' },
+  'outfit.item.7': { cost: 25, lv: 2, rare: 1, en: 'Toy robot', zh: '玩具机器人', py: 'wánjù jīqìrén', ms: 'robot mainan' },
+  'outfit.item.6': { cost: 45, lv: 4, rare: 1, en: 'Sword', zh: '宝剑', py: 'bǎojiàn', ms: 'pedang' },
 
   // Car Garage: car body
   'car.body.3': { cost: 30, lv: 3, rare: 1, en: 'Buggy', zh: '越野车', py: 'yuèyěchē', ms: 'kereta bugi' },
@@ -64,8 +74,10 @@ const ITEMS = {
 };
 
 // What a design falls back to when it uses something the player does not own.
+// An outfit with body 1 (the boy) falls back to the boy's free things, so he is never put into a dress.
 const FREE = {
   outfit: { head: 3, dress: 1, back: 0, item: 2 },
+  outfitBoy: { head: 0, dress: 6, back: 0, item: 5 },
   car: { body: 1, decal: 1, wheel: 0, spoiler: 1, extra: 0 }
 };
 
