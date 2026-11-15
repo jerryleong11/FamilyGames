@@ -34,8 +34,9 @@ function saveSoon() {
 }
 
 // ---------- the town ----------
+// A building whose id is also a game module (see GAMES below) opens by itself when that module loads.
 const WORLD = {
-  w: 2400, h: 1600, spawn: { x: 1200, y: 880 },
+  w: 3400, h: 1600, spawn: { x: 1200, y: 880 },
   buildings: [
     { id: 'studio', name: 'Art Studio', x: 300, y: 220, w: 360, h: 250, open: true, wall: '#FF8FB8', roof: '#E0447F' },
     { id: 'gallery', name: 'Gallery', x: 1020, y: 180, w: 360, h: 250, open: true, wall: '#FFD66B', roof: '#F08A24' },
@@ -43,13 +44,18 @@ const WORLD = {
     { id: 'cars', name: 'Car Garage', x: 1400, y: 560, w: 300, h: 250, open: true, wall: '#FFB07A', roof: '#D0461F' },
     { id: 'pets', name: 'Pet Home', x: 300, y: 1090, w: 360, h: 250, open: false, wall: '#8FE3C8', roof: '#2F9E83' },
     { id: 'monopoly', name: 'Monopoly', x: 1020, y: 1190, w: 360, h: 250, open: false, wall: '#B9A6FF', roof: '#6C4BD8' },
-    { id: 'escape', name: 'Escape Room', x: 1740, y: 1090, w: 360, h: 250, open: false, wall: '#9CCBFF', roof: '#2F6FCC' }
+    { id: 'escape', name: 'Escape Room', x: 1740, y: 1090, w: 360, h: 250, open: false, wall: '#9CCBFF', roof: '#2F6FCC' },
+    // the east side of town
+    { id: 'race', name: 'Race Track', x: 2480, y: 560, w: 300, h: 250, open: false, wall: '#D6E4FF', roof: '#3B5BDB' },
+    { id: 'obby', name: 'Obby Tower', x: 2940, y: 560, w: 300, h: 250, open: false, wall: '#D3F9D8', roof: '#37B24D' },
+    { id: 'boss', name: 'Monster Cave', x: 2440, y: 1090, w: 360, h: 250, open: false, wall: '#FFD8D8', roof: '#C92A2A' },
+    { id: 'plot', name: 'Home Street', x: 2900, y: 1090, w: 360, h: 250, open: false, wall: '#FFE8CC', roof: '#A05A2C' }
   ],
   playground: { x: 1680, y: 200, w: 480, h: 340 },
   goals: [25, 60, 120, 200]
 };
 const MAX_PLAYERS = 8;
-const STAR_COUNT = 9;
+const STAR_COUNT = 13;
 
 const players = new Map(); // id -> player
 let nextId = 1;
@@ -76,7 +82,14 @@ function broadcast(obj, filter) {
 }
 function inRoom(room) { return function (p) { return p.room === room; }; }
 function roomList(room) { return Array.from(players.values()).filter(inRoom(room)).sort(function (a, b) { return a.id - b.id; }); }
-function pub(p) { return { id: p.id, name: p.name, color: p.color, hat: p.hat, big: p.big, stars: p.stars, lv: SHOP.levelOf(p.stars), room: p.room, outfit: p.outfit, car: p.car, drive: p.drive }; }
+const extenders = {}; // game id -> function (player) that returns what everyone may see of that player (a pet, a trophy...)
+function pub(p) {
+  const o = { id: p.id, name: p.name, color: p.color, hat: p.hat, big: p.big, stars: p.stars, lv: SHOP.levelOf(p.stars), room: p.room, outfit: p.outfit, car: p.car, drive: p.drive };
+  Object.keys(extenders).forEach(function (id) {
+    try { const v = extenders[id](p); if (v !== undefined && v !== null) { o.ext = o.ext || {}; o.ext[id] = v; } } catch (e) { console.error('ext "' + id + '":', e.message); }
+  });
+  return o;
+}
 // A design (outfit or car) is a small flat object of numbers and colours made by the designer screens.
 function cleanDesign(d) {
   if (!d || typeof d !== 'object' || Array.isArray(d)) return null;
@@ -117,6 +130,15 @@ function newQuests() {
 function questsOf(prof) {
   const day = today();
   if (!prof.quests || prof.quests.day !== day || !Array.isArray(prof.quests.list)) { prof.quests = { day: day, list: newQuests(), chest: false }; saveSoon(); }
+  // a quest kind that no longer exists (removed, or its game did not load) is swapped for another one
+  prof.quests.list.forEach(function (it, i) {
+    if (QUEST_DEF[it.type]) return;
+    const have = prof.quests.list.map(function (o) { return o.type; });
+    const q = shuffle(SHOP.QUESTS.filter(function (o) { return o.solo && have.indexOf(o.type) < 0; }))[0] || SHOP.QUESTS[0];
+    const tier = q.tiers[Math.floor(Math.random() * q.tiers.length)];
+    prof.quests.list[i] = { type: q.type, n: tier[0], reward: tier[1], have: it.claimed ? tier[0] : 0, claimed: !!it.claimed };
+    saveSoon();
+  });
   return prof.quests;
 }
 function owns(prof, id) { return prof.owned.indexOf(id) >= 0; }
@@ -317,6 +339,7 @@ function onJoin(ws, m) {
   sendPlayers();
   toast(name + ' joined the town!', function (o) { return o.id !== p.id; });
   console.log(name + ' joined (' + players.size + ' online)');
+  joiners.forEach(function (fn) { guard('join', function () { fn(p); }); });
 }
 function onMessage(ws, m) {
   const p = ws.player;
@@ -331,8 +354,7 @@ function onMessage(ws, m) {
         if (dx * dx + dy * dy < 54 * 54) {
           stars.splice(i, 1);
           broadcast({ t: 'stars', list: stars });
-          send(p, { t: 'card', word: WORDS[Math.floor(Math.random() * WORDS.length)] });
-          p.cardFresh = true; // listening to this card counts once for the "words" quest
+          send(p, { t: 'got', n: 1 }); // the tablet shows "+1" and plays the star sound
           questEvent(p, 'stars');
           if (p.drive) questEvent(p, 'drive');
           addStars(p, 1);
@@ -342,12 +364,17 @@ function onMessage(ws, m) {
       }
       break;
     case 'room':
-      if (m.room !== 'town' && m.room !== 'studio') return;
+      if (m.room !== 'town' && m.room !== 'studio' && !rooms[m.room]) return;
       if (p.room === m.room) return;
-      p.room = m.room; p.m = 0;
-      if (m.room === 'studio') { send(p, { t: 'strokes', list: strokes }); send(p, guessMsg(p)); }
-      sendPlayers();
-      studioChanged();
+      {
+        const old = p.room;
+        p.room = m.room; p.m = 0; p.drive = p.drive && m.room === 'town';
+        if (rooms[old] && rooms[old].leave) guard('leave ' + old, function () { rooms[old].leave(p); });
+        if (m.room === 'studio') { send(p, { t: 'strokes', list: strokes }); send(p, guessMsg(p)); }
+        sendPlayers();
+        studioChanged();
+        if (rooms[m.room] && rooms[m.room].enter) guard('enter ' + m.room, function () { rooms[m.room].enter(p); });
+      }
       break;
     case 'look': // saved from the Dress-Up Boutique or the Car Garage
       {
@@ -369,9 +396,6 @@ function onMessage(ws, m) {
     case 'emote':
       broadcast({ t: 'emote', id: p.id, e: clamp(parseInt(m.e, 10) || 0, 0, 5) });
       if (p.room === 'town' && roomList('town').some(function (o) { return o.id !== p.id && Math.abs(o.x - p.x) < 260 && Math.abs(o.y - p.y) < 260; })) questEvent(p, 'emote');
-      break;
-    case 'heard': // the player tapped the word card to hear it read aloud
-      if (p.cardFresh) { p.cardFresh = false; questEvent(p, 'words'); }
       break;
     case 'buy':
       {
@@ -474,17 +498,65 @@ function onMessage(ws, m) {
       broadcast(tagMsg());
       toast('Tag! ' + p.name + ' is "it". Run!');
       break;
+    default: // "pets.feed", "race.ready" ...: messages of the game modules in games/
+      if (handlers[m.t]) handlers[m.t](p, m);
   }
 }
 function onLeave(ws) {
   const p = ws.player;
   if (!p || !players.has(p.id)) return;
   players.delete(p.id);
+  if (rooms[p.room] && rooms[p.room].leave) guard('leave ' + p.room, function () { rooms[p.room].leave(p); });
+  quitters.forEach(function (fn) { guard('quit', function () { fn(p); }); });
   sendPlayers();
   studioChanged();
   toast(p.name + ' left the town.');
   console.log(p.name + ' left (' + players.size + ' online)');
 }
+
+// ---------- game modules: every game in games/<id>.js plugs in through this api (docs/GAME-MODULES.md) ----------
+const GAMES = ['pets', 'race', 'obby', 'boss', 'monopoly', 'escape', 'plot'];
+const handlers = {}, rooms = {}, joiners = [], quitters = [];
+function guard(what, fn) { try { return fn(); } catch (e) { console.error('Game module error (' + what + '):', e); } }
+function spend(p, n) { // takes stars from what the player can spend; false when there are not enough
+  const prof = save.profiles[p.key];
+  n = Math.round(+n);
+  if (!prof || !(n >= 0) || p.stars - prof.spent < n) return false;
+  prof.spent += n;
+  saveSoon();
+  sendMe(p);
+  return true;
+}
+function gameApi(id) {
+  return {
+    id: id, WORLD: WORLD, players: players, save: save, saveSoon: saveSoon,
+    send: send, broadcast: broadcast, toast: toast, inRoom: inRoom, roomList: roomList,
+    sendPlayers: sendPlayers, sendMe: sendMe,
+    prof: function (p) { return save.profiles[p.key]; },
+    coins: function (p) { const prof = save.profiles[p.key]; return prof ? p.stars - prof.spent : 0; },
+    addStars: addStars, spend: spend, levelOf: SHOP.levelOf,
+    questEvent: questEvent,
+    addQuest: function (def) { SHOP.QUESTS.push(def); QUEST_DEF[def.type] = def; },
+    // on('feed', fn) handles the message { t: '<id>.feed' }
+    on: function (name, fn) { handlers[id + '.' + name] = function (p, m) { guard(id + '.' + name, function () { fn(p, m); }); }; },
+    // the game's own room: enter(p) / leave(p) are called when a player comes in, goes out or disconnects
+    room: function (hooks) { rooms[id] = hooks || {}; },
+    ext: function (fn) { extenders[id] = fn; },
+    onJoin: function (fn) { joiners.push(fn); },
+    onQuit: function (fn) { quitters.push(fn); },
+    rnd: rnd, clamp: clamp, shuffle: shuffle, today: today, cleanName: cleanName, cleanDesign: cleanDesign
+  };
+}
+const loaded = {};
+GAMES.forEach(function (id) {
+  const file = path.join(__dirname, 'games', id + '.js');
+  if (!fs.existsSync(file)) return;
+  try { require(file)(gameApi(id)); loaded[id] = true; }
+  catch (e) { console.error('Game "' + id + '" did not load and stays closed:', e); delete rooms[id]; delete extenders[id]; }
+});
+WORLD.buildings.forEach(function (b) { if (GAMES.indexOf(b.id) >= 0) b.open = !!loaded[b.id]; });
+// one broken timer in a game must not end everybody's session
+process.on('uncaughtException', function (e) { console.error('Unexpected error (the game keeps running):', e); });
 
 // ---------- web server ----------
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml', '.json': 'application/json', '.ico': 'image/x-icon', '.webmanifest': 'application/manifest+json' };
@@ -500,6 +572,11 @@ const server = http.createServer(function (req, res) {
   if (url === '/api/status') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ version: VERSION, players: players.size, names: Array.from(players.values()).map(function (p) { return p.name; }) }));
+    return;
+  }
+  if (url === '/api/shutdown' && process.env.TEST_SHUTDOWN) { // test servers only: lets a test stop its own server
+    res.writeHead(200); res.end('bye');
+    setTimeout(function () { process.exit(0); }, 50);
     return;
   }
   if (url === '/api/gallery' && req.method === 'GET') {
@@ -565,6 +642,10 @@ setInterval(function () {
   players.forEach(function (p) { const prof = save.profiles[p.key]; if (prof && (!prof.quests || prof.quests.day !== day)) sendMe(p); });
 }, 60000);
 
+server.on('error', function (e) { // most often: the port is already in use by another copy of the game
+  console.error('\n  The game server could not start: ' + e.message + '\n');
+  process.exit(1);
+});
 server.listen(PORT, '0.0.0.0', function () {
   console.log('');
   console.log('  Family Town  [' + VERSION + ']  is running.');

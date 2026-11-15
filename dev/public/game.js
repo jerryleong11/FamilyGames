@@ -18,6 +18,9 @@
 
   // ---------- state ----------
   var ws = null, me = 0, world = null, version = null, joined = false, room = 'town';
+  var GAMES = window.FTGames = window.FTGames || {}; // pets, race, obby ...: one file each in games/, see docs/GAME-MODULES.md
+  var ROOM_ICON = { studio: '🎨', pets: '🐾', race: '🏁', obby: '🧗', boss: '👾', monopoly: '🎲', escape: '🗝️', plot: '🏡' };
+  var pops = []; // "+1" floating up from my player when stars come in
   var players = {}, stars = [], family = 0;
   var my = { x: 0, y: 0, f: 1, m: 0 };
   var look = { name: '', color: COLORS[0], hat: 0, big: false };
@@ -203,8 +206,8 @@
         shop = m.shop || null; meState = null; // an older server sends neither "shop" nor "me": the game then plays as before
         if (!joined) { my.x = m.x; my.y = m.y; toast('Drag on the left side to walk. On a laptop, use the arrow keys.'); }
         joined = true;
-        $('join').hidden = true; $('lost').hidden = true; $('hud').hidden = (room === 'studio');
-        if (room === 'studio') send({ t: 'room', room: 'studio' });
+        $('join').hidden = true; $('lost').hidden = true; $('hud').hidden = (room !== 'town');
+        if (room === 'studio' || GAMES[room]) send({ t: 'room', room: room });
         sent.t = 0; sent.x = -1;
         break;
       case 'players':
@@ -216,7 +219,7 @@
             if (gotList && d.id !== me) fresh = true;
           }
           p.id = d.id; p.name = d.name; p.color = d.color; p.hat = d.hat; p.big = d.big; p.stars = d.stars; p.room = d.room;
-          p.outfit = d.outfit; p.car = d.car; p.drive = d.drive; p.lv = d.lv || 0;
+          p.outfit = d.outfit; p.car = d.car; p.drive = d.drive; p.lv = d.lv || 0; p.ext = d.ext || {};
           seen[d.id] = 1;
         }
         Object.keys(players).forEach(function (id) { if (!seen[id]) delete players[id]; });
@@ -225,6 +228,7 @@
         updateHud(); renderStudioSide();
         if (goalHit) sfx('goal'); else if (fresh) sfx('join');
         if (!wasDrive && mine() && mine().drive) sfx('car');
+        gameEvent('onPlayers');
         break;
       case 'state':
         for (i = 0; i < m.p.length; i++) {
@@ -235,7 +239,7 @@
         }
         break;
       case 'stars': stars = m.list; break;
-      case 'card': showCard(m.word); sfx('star'); setTimeout(function () { sfx('card'); }, 240); break;
+      case 'got': sfx('star'); if (room === 'town') pops.push({ n: m.n || 1, t0: Date.now() }); break;
       case 'toast': toast(m.msg); break;
       case 'emote': p = players[m.id]; if (p) { p.emote = EMOTES[m.e] || EMOTES[0]; p.emoteUntil = Date.now() + 2600; if (room === 'town') sfx('emote'); } break;
       case 'tag':
@@ -246,7 +250,7 @@
         break;
       case 'me':
         if (!Array.isArray(m.owned)) m.owned = [];
-        meState = m; updateHud(); renderQuests();
+        meState = m; updateHud(); renderQuests(); gameEvent('onMe');
         break;
       case 'questDone': onQuestDone(m); break;
       case 'levelup': celebrate({ kind: 'level', lv: m.lv, items: Array.isArray(m.items) ? m.items : [] }); break;
@@ -256,6 +260,9 @@
       case 'draw': sSeg(m.c, m.w, m.pts); break;
       case 'clear': sClear(); break;
       case 'guess': onGuess(m); break;
+      default: // "pets.state", "race.go" ...: messages for a game module
+        var dot = String(m.t).indexOf('.'), gm = dot > 0 ? GAMES[m.t.slice(0, dot)] : null;
+        if (gm && typeof gm.onMessage === 'function') { try { gm.onMessage(m); } catch (e) { if (window.console) console.error(e); } }
     }
   }
 
@@ -265,7 +272,7 @@
     return list.map(function (p) {
       return '<span class="tagc' + (p.id === me ? ' me' : '') + '"><i style="background:' + esc(p.color) + '"></i>' + esc(p.name) +
         (p.lv ? ' <b class="lvc">Lv ' + p.lv + '</b>' : '') +
-        (withRoom && p.lv ? '' : ' <em>⭐' + p.stars + '</em>') + (withRoom && p.room === 'studio' ? ' <em>🎨</em>' : '') + '</span>';
+        (withRoom && p.lv ? '' : ' <em>⭐' + p.stars + '</em>') + (withRoom && ROOM_ICON[p.room] ? ' <em>' + ROOM_ICON[p.room] + '</em>' : '') + '</span>';
     }).join('');
   }
   function plist() { return Object.keys(players).map(function (id) { return players[id]; }).sort(function (a, b) { return a.id - b.id; }); }
@@ -309,19 +316,7 @@
     clearTimeout(toastTimer); toastTimer = setTimeout(function () { el.hidden = true; }, 3600);
   }
 
-  // word card + reading aloud
-  var cardWord = null, cardTimer = null, cardHeard = false;
-  function showCard(w) {
-    cardWord = w; cardHeard = false;
-    $('cardPic').textContent = w.pic; $('cardEn').textContent = w.en; $('cardZh').innerHTML = esc(w.zh) + ' ' + pyHtml(w); $('cardMs').textContent = w.ms;
-    $('card').hidden = false;
-    clearTimeout(cardTimer); cardTimer = setTimeout(function () { $('card').hidden = true; }, 7000);
-  }
-  $('card').onclick = function () {
-    if (!cardWord) return;
-    speak(cardWord);
-    if (!cardHeard) { cardHeard = true; send({ t: 'heard' }); } // counts for the "listen to words" quest, once per card
-  };
+  // reading a word aloud in three languages (used by the guessing game)
   function speak(w) {
     var syn = window.speechSynthesis; if (!syn || !window.SpeechSynthesisUtterance) return;
     try {
@@ -388,6 +383,7 @@
     });
     if (best) {
       var txt = { studio: 'Enter Art Studio', gallery: 'Open Gallery', dress: 'Enter Dress-Up', cars: 'Enter Car Garage' }[best.id];
+      if (!txt && GAMES[best.id] && typeof GAMES[best.id].open === 'function') txt = 'Enter ' + best.name;
       return best.open && txt ? { id: best.id, text: txt } : { id: null, text: best.name + ' · coming soon' };
     }
     var g = world.playground;
@@ -410,6 +406,10 @@
     if (action.id === 'studio') { sfx('open'); enterStudio(); }
     else if (action.id === 'gallery') { sfx('open'); openGallery(); }
     else if (action.id === 'tag') { sfx('tap'); send({ t: 'tagStart' }); }
+    else if (GAMES[action.id]) {
+      sfx('open');
+      try { GAMES[action.id].open(); } catch (e) { if (window.console) console.error(e); toast('Something went wrong opening this game.'); }
+    }
     else if (action.id === 'dress') {
       if (!Dress) return toast('Dress-Up is not ready yet.');
       sfx('open');
@@ -534,7 +534,7 @@
   function render(t) {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.fillStyle = '#4FA05A'; ctx.fillRect(0, 0, W, H);
-    if (!joined || !world || room === 'studio') return;
+    if (!joined || !world || room !== 'town') return;
     var scale = Math.max(H / 880, 0.7); if (W / scale < 700) scale = W / 700;
     var vw = W / scale, vh = H / scale;
     var cx = vw >= world.w ? (world.w - vw) / 2 : clamp(my.x - vw / 2, 0, world.w - vw);
@@ -562,9 +562,19 @@
         }
       } });
     });
+    Object.keys(GAMES).forEach(function (id) { // e.g. pets walking next to their owners
+      if (typeof GAMES[id].town === 'function') { try { GAMES[id].town(c, t, view, items); } catch (e) {} }
+    });
     items.sort(function (a, b) { return a.y - b.y; });
     for (i = 0; i < items.length; i++) items[i].d();
     Scene.sky(c, world, view, t);
+    for (i = pops.length - 1; i >= 0; i--) { // "+1" floats up from my player
+      var age = (Date.now() - pops[i].t0) / 900;
+      if (age >= 1) { pops.splice(i, 1); continue; }
+      c.globalAlpha = 1 - age * age; c.font = '700 34px ' + FONT; c.textAlign = 'center'; c.textBaseline = 'middle'; c.lineJoin = 'round';
+      c.lineWidth = 7; c.strokeStyle = NAVY; c.strokeText('+' + pops[i].n + ' ⭐', my.x, my.y - 150 - age * 70);
+      c.fillStyle = '#FFD66B'; c.fillText('+' + pops[i].n + ' ⭐', my.x, my.y - 150 - age * 70); c.globalAlpha = 1;
+    }
 
     // joystick
     if (joy) {
@@ -656,7 +666,7 @@
   $('exitStudio').onclick = function () { sfx('close'); room = 'town'; send({ t: 'room', room: 'town' }); $('studio').hidden = true; $('hud').hidden = false; };
   function enterStudio() {
     room = 'studio'; joy = null; send({ t: 'room', room: 'studio' });
-    $('studio').hidden = false; $('hud').hidden = true; $('card').hidden = true;
+    $('studio').hidden = false; $('hud').hidden = true;
     sClear(); fitPaper(); renderGuess();
   }
   // Pinyin gets its own span: the Fredoka font draws "ī" wrongly, so .py uses the device font.
@@ -874,6 +884,73 @@
     if (alive && confAge < 6 && celebNow) confRaf = requestAnimationFrame(confFrame);
     else { confRaf = 0; confP = []; c.clearRect(0, 0, cv.width, cv.height); }
   }
+
+  // ---------- game modules: what games/<id>.js files may use (docs/GAME-MODULES.md) ----------
+  function gameEvent(name) {
+    Object.keys(GAMES).forEach(function (id) {
+      if (typeof GAMES[id][name] === 'function') { try { GAMES[id][name](); } catch (e) { if (window.console) console.error(e); } }
+    });
+  }
+  // A drag-anywhere joystick on `el`; arrow keys and WASD count too. read() gives { x, y } between -1 and 1.
+  function makeStick(el) {
+    var st = { on: false, ox: 0, oy: 0, dx: 0, dy: 0, id: null };
+    function down(e) { if (st.id !== null) return; st.id = e.pointerId; st.on = true; st.ox = e.clientX; st.oy = e.clientY; st.dx = st.dy = 0; try { el.setPointerCapture(e.pointerId); } catch (err) {} }
+    function move(e) {
+      if (e.pointerId !== st.id) return;
+      var dx = (e.clientX - st.ox) / 60, dy = (e.clientY - st.oy) / 60, l = Math.sqrt(dx * dx + dy * dy);
+      if (l > 1) { dx /= l; dy /= l; }
+      st.dx = dx; st.dy = dy;
+    }
+    function up(e) { if (e.pointerId !== st.id) return; st.id = null; st.on = false; st.dx = st.dy = 0; }
+    el.addEventListener('pointerdown', down); el.addEventListener('pointermove', move); el.addEventListener('pointerup', up); el.addEventListener('pointercancel', up);
+    st.read = function () {
+      if (st.on) return { x: st.dx, y: st.dy };
+      var x = (keys.arrowright || keys.d ? 1 : 0) - (keys.arrowleft || keys.a ? 1 : 0), y = (keys.arrowdown || keys.s ? 1 : 0) - (keys.arrowup || keys.w ? 1 : 0), l = Math.sqrt(x * x + y * y);
+      return l > 1 ? { x: x / l, y: y / l } : { x: x, y: y };
+    };
+    // draws the stick; `c` must be in CSS pixels of the page (no camera transform) with (0,0) at the element's top-left
+    st.draw = function (c) {
+      if (!st.on) return;
+      var r = el.getBoundingClientRect(), x = st.ox - r.left, y = st.oy - r.top;
+      c.fillStyle = 'rgba(255,255,255,0.45)'; c.strokeStyle = NAVY; c.lineWidth = 3;
+      c.beginPath(); c.arc(x, y, 62, 0, 7); c.fill(); c.stroke();
+      c.fillStyle = '#FFD66B'; c.beginPath(); c.arc(x + st.dx * 50, y + st.dy * 50, 28, 0, 7); c.fill(); c.stroke();
+    };
+    st.destroy = function () { el.removeEventListener('pointerdown', down); el.removeEventListener('pointermove', move); el.removeEventListener('pointerup', up); el.removeEventListener('pointercancel', up); };
+    return st;
+  }
+  var api = {
+    send: send, toast: toast, sfx: sfx, esc: esc, clamp: clamp, FONT: FONT, NAVY: NAVY,
+    myId: function () { return me; },
+    me: function () { return meState; },            // my own numbers: { stars, coins, lv, owned, quests } or null
+    self: mine,                                     // my entry in players()
+    players: function () { return players; },       // id -> { id, name, color, hat, big, lv, room, outfit, car, ext }
+    world: function () { return world; },
+    room: function () { return room; },
+    // go into the game's own room (hides the town and its buttons) and back out to the town
+    enter: function (id) { room = id; joy = null; keys = {}; $('emotes').hidden = true; send({ t: 'room', room: id }); $('hud').hidden = true; },
+    leave: function () { if (room === 'town') return; room = 'town'; keys = {}; send({ t: 'room', room: 'town' }); $('hud').hidden = false; },
+    // a name in three languages, pinyin in the device font: three({ en, zh, py, ms })
+    three: function (o) { return '<b>' + esc(o.en) + '</b> · ' + esc(o.zh) + ' <span class="py">' + esc(o.py) + '</span> · ' + esc(o.ms); },
+    // draws a player the way they look in town, feet at (x, y); o = { scale, facing: 1|-1, moving, car: true to draw their car }
+    // returns the height drawn, for placing a name tag
+    drawAvatar: function (c, p, x, y, t, o) {
+      o = o || {};
+      var s = o.scale > 0 ? o.scale : 1, f = o.facing < 0 ? -1 : 1, mv = !!o.moving, sc;
+      if (o.car && Car) { Car.draw(c, x, y, p.car || Car.defaults(), { facing: f, t: t, moving: mv, driver: p.color, scale: s }); return 92 * s; }
+      if (p.outfit && Dress) { sc = (p.big ? 1.22 : 1) * s; Dress.draw(c, x, y, p.outfit, { facing: f, t: t, moving: mv, scale: sc }); return 104 * sc; }
+      drawBlock(c, x, y, { color: p.color, hat: p.hat, big: p.big, f: f, m: mv ? 1 : 0 }, t, s);
+      return ((p.big ? 84 : 56) + (p.hat ? 34 : 12)) * s;
+    },
+    nameTag: nameTag,                               // nameTag(c, player, x, y, isMe): the pill above a player, returns its height
+    label: label, rr: rr, starPath: starPath,
+    stick: makeStick,
+    keys: function () { return keys; }              // keys held down right now, lower case: { arrowleft: true, ' ': true }
+  };
+  Object.keys(GAMES).forEach(function (id) {
+    try { if (typeof GAMES[id].init === 'function') GAMES[id].init(api); }
+    catch (e) { if (window.console) console.error('Game "' + id + '" did not start:', e); delete GAMES[id]; }
+  });
 
   resize(); sClear();
   requestAnimationFrame(frame);

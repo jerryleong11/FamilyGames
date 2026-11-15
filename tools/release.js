@@ -102,7 +102,9 @@ if (arg === '--status') {
 
   // Refuse to go live with a server that cannot even start.
   const bad = [];
-  ['server.js', 'words.js', 'shop.js'].forEach(function (f) {
+  let serverFiles = ['server.js', 'words.js', 'shop.js'];
+  try { serverFiles = serverFiles.concat(fs.readdirSync(path.join(dest, 'games')).filter(function (n) { return /\.js$/.test(n); }).map(function (n) { return path.join('games', n); })); } catch (e) {}
+  serverFiles.forEach(function (f) {
     const file = path.join(dest, f);
     if (!fs.existsSync(file)) return;
     const r = spawnSync(process.execPath, ['--check', file], { encoding: 'utf8' });

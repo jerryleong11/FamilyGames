@@ -1,6 +1,6 @@
 # Family Town
 
-Laptop-hosted multiplayer web game for one family: two kids (girl 8, boy 6) on Honor kids tablets, plus parents. Everyone plays together in one shared town and sees each other live. Learning (English, 中文, Bahasa Malaysia, maths) happens inside the gameplay, never as a language switch or a quiz wall.
+Laptop-hosted multiplayer web game for one family: two kids (girl 8, boy 6) on Honor kids tablets, plus parents. Everyone plays together in one shared town and sees each other live. Maths stays inside the gameplay (prices, sums, counting), never as a quiz wall. Word and vocabulary learning was removed at the owner's request on 2026-11-15: no word cards, no spelling or translation questions. Names of quests, shop items, pets and the guessing-game words are still shown in English, 中文 with pinyin, and Malay, as labels only.
 
 Read `docs/HANDOFF.md` first: it is the compiled history of the planning conversation, with every decision, the current state, what is untested, and the backlog. `docs/GAME-PLAN.md` and `docs/ARCHITECTURE.md` have the design and the technical detail.
 
@@ -37,6 +37,6 @@ node_modules/ws     shared by dev and all releases
 - Growth data (level thresholds, shop items with prices, the daily quest pool) lives in `dev/shop.js`; the server owns stars, levels, purchases and quest progress. New saves fields are only ever added, never renamed.
 - Pinyin is always wrapped in `<span class="py">` (device font): Fredoka misdraws `ī`.
 - Every game must be playable together (kids and parents). Anything on a map shows where the other players are.
-- Words shown to the kids come from `dev/words.js` and always appear in all three languages (English, 中文 with pinyin, Malay). Chinese is Simplified.
-- Each new game is its own file exposing one global (like `design-dress.js` / `design-car.js`), opened from a building in the town; add the building to `WORLD.buildings` in `dev/server.js` and its action in `findAction()` / `actBtn` handler in `dev/public/game.js`.
+- Names shown to the kids (quests, shop items, pets, the guessing-game words in `dev/words.js`) always appear in all three languages (English, 中文 with pinyin, Malay). Chinese is Simplified.
+- Each game behind a building is a module: `dev/games/<id>.js` (server) plus `dev/public/games/<id>.js` (client), plugged in through the APIs in `docs/GAME-MODULES.md`. A module never edits the core files. To add one: its id in `GAMES` in `dev/server.js`, a building with the same id in `WORLD.buildings`, and a script tag in `dev/public/index.html`. The Dress-Up and Car Garage designers (`design-dress.js`, `design-car.js`) predate this and are opened directly by `game.js`.
 - Player designs sent to the server must be flat objects of small integers and `#rrggbb` strings (see `cleanDesign` in `server.js`).

@@ -58,13 +58,6 @@
   <button id="actBtn" class="btn primary action" type="button" data-quiet hidden></button>
 </div>
 
-<!-- Word card shown when a star is collected -->
-<button id="card" class="wordCard" type="button" data-quiet hidden>
-  <span id="cardPic" class="pic"></span>
-  <span class="words"><b id="cardEn"></b><span id="cardZh"></span><span id="cardMs"></span></span>
-  <span class="spk" aria-hidden="true">🔊</span>
-</button>
-
 <div id="toast" class="toast" role="status" hidden></div>
 <div id="lost" class="lost" hidden>Connection lost. Trying again…</div>
 
@@ -119,6 +112,14 @@
 <script src="design-dress.js"></script>
 <script src="design-car.js"></script>
 <script src="scene.js"></script>
+<!-- One file per game. Each registers itself in window.FTGames; game.js (last) starts them. See docs/GAME-MODULES.md -->
+<script src="games/pets.js"></script>
+<script src="games/race.js"></script>
+<script src="games/obby.js"></script>
+<script src="games/boss.js"></script>
+<script src="games/monopoly.js"></script>
+<script src="games/escape.js"></script>
+<script src="games/plot.js"></script>
 <script src="game.js"></script>
 </body>
 </html>

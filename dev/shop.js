@@ -72,12 +72,10 @@ const FREE = {
 // ---------- daily quests ----------
 // Every player gets 3 of these each day. `tiers` are [how many, reward in stars]; one tier is picked at random.
 // `solo: true` means it can be finished alone; at least 2 of the 3 daily quests are solo ones.
-// {n} in the texts is replaced by the number.
+// {n} in the texts is replaced by the number. Game modules in games/ add their own with api.addQuest().
 const QUESTS = [
   { type: 'stars', icon: '⭐', solo: true, tiers: [[8, 5], [12, 7], [16, 9]],
     en: 'Collect {n} stars', zh: '收集 {n} 颗星星', py: 'shōují {n} kē xīngxing', ms: 'Kumpul {n} bintang' },
-  { type: 'words', icon: '🔊', solo: true, tiers: [[3, 4], [5, 6]],
-    en: 'Listen to {n} words', zh: '听 {n} 个词语', py: 'tīng {n} gè cíyǔ', ms: 'Dengar {n} perkataan' },
   { type: 'drive', icon: '🚗', solo: true, tiers: [[5, 5], [8, 7]],
     en: 'Collect {n} stars by car', zh: '开车收集 {n} 颗星星', py: 'kāichē shōují {n} kē xīngxing', ms: 'Kumpul {n} bintang dengan kereta' },
   { type: 'gallery', icon: '🖼️', solo: true, tiers: [[1, 5]],
