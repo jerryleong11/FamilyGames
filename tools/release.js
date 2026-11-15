@@ -102,7 +102,7 @@ if (arg === '--status') {
 
   // Refuse to go live with a server that cannot even start.
   const bad = [];
-  ['server.js', 'words.js'].forEach(function (f) {
+  ['server.js', 'words.js', 'shop.js'].forEach(function (f) {
     const file = path.join(dest, f);
     if (!fs.existsSync(file)) return;
     const r = spawnSync(process.execPath, ['--check', file], { encoding: 'utf8' });

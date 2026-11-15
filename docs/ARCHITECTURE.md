@@ -19,7 +19,8 @@ family-town/
   dev/               working copy of the game (never played by the kids)
     server.js        game server
     words.js         word list (EN / 中文 / pinyin / BM)
-    public/          index.html, style.css, game.js
+    shop.js          growth data: level thresholds, shop catalogue, daily quest pool
+    public/          index.html, style.css, game.js, design-dress.js, design-car.js, sound.js
   releases/v1, v2..  frozen copies made by the release tool (+ version.json)
   live.json          which release the kids' server runs: {"version":"v3","previous":"v2"}
   data/live/         kids' saves and gallery (never touched by a release)
@@ -67,7 +68,11 @@ Client to server:
 | `draw`, `clear` | a batch of stroke points on the shared paper; wipe the paper |
 | `guessStart`, `guessStop`, `guessTry` | control the guessing game; pick option `i` |
 | `tagStart` | start tag from the playground |
-| `look`, `drive` | (being added) save an outfit or car design; get in or out of a car |
+| `look`, `drive` | save an outfit or car design; get in or out of a car |
+| `buy` | `id`: buy a shop item (`outfit.head.1`, `car.body.4` ...) |
+| `claim` | `i`: take the reward of finished daily quest 0-2 |
+| `chest` | open today's chest (only after all three quests are claimed) |
+| `heard` | the player tapped the word card to hear it (counts for the "words" quest) |
 
 Server to client:
 
@@ -83,12 +88,30 @@ Server to client:
 | `strokes`, `draw`, `clear` | the studio paper: full history on entry, then live updates |
 | `guess` | guessing-game state, different per player (drawer sees the word, others see four options) |
 | `tag` | whether tag is on, who is "it", time left |
+| `me` | the player's own numbers: `stars`, `coins`, `lv`, `lvAt`, `lvNext`, `owned`, and `quests` (`day`, `streak`, `chest`: locked / ready / opened, `list` of three with texts in three languages). Sent after `welcome` and after every change |
+| `questDone` | quest `i` just reached its target |
+| `levelup` | new `lv` and the shop `items` that level unlocks |
+| `bought` | answer to `buy`: `id`, `ok`, and `why` (stars / level / owned / chest / unknown) when refused. A `me` with the new numbers is sent first |
+| `chestOpen` | bonus `stars`, the legendary `item` found (or null), `streak` |
+
+`welcome` also carries `shop: { items, levels }` from `shop.js`, and each entry of `players` has `lv`.
+
+## Growth system
+
+- **Stars and coins.** `stars` is everything a player has earned; it gives the level (`shop.js` `LEVELS`: 10, 30, 60, 100 ... stars) and never goes down. Buying adds to `spent`; what can be spent ("coins") is `stars - spent`. The family jar counts earned stars.
+- **Shop.** The catalogue lives in `shop.js` (`ITEMS`, id = `kind.key.value`). Items have a price, a level and a rarity; `chest: true` items cannot be bought. The Dress-Up and Car Garage screens show the locks and sell the items (`open(design, onSave, { shop })`). The server swaps any option the player does not own for the free one (`enforce`), so a design can never show an unowned item.
+- **Daily quests.** Three per player per laptop-local day, picked from `QUESTS` (at least two can be done alone). The server counts progress from game events (`questEvent`). Claiming all three unlocks the daily chest: bonus stars plus sometimes a legendary item (always in a player's first chest, at least every third).
+- **Older saves.** A profile without `owned` gets one on its next join, filled with whatever its saved outfit and car were using, so nobody loses a look.
 
 ## Save file (`data/live/save.json`)
 
 ```json
-{ "profiles": { "mia": { "name": "Mia", "stars": 12, "color": "#FF8FB8", "hat": 2, "big": false } },
-  "family": 37,
+{ "profiles": { "mia": { "name": "Mia", "stars": 112, "spent": 60, "owned": ["outfit.head.1"],
+      "color": "#FF8FB8", "hat": 2, "big": false, "outfit": { }, "car": { },
+      "quests": { "day": "2026-11-15", "chest": false,
+        "list": [ { "type": "stars", "n": 8, "reward": 5, "have": 3, "claimed": false } ] },
+      "streak": 2, "lastChest": "2026-11-14", "chests": 5, "pity": 1 } },
+  "family": 337,
   "gallery": [ { "file": "1794725000000.png", "name": "Mia", "ts": 1794725000000 } ] }
 ```
 

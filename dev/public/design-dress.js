@@ -1,5 +1,7 @@
 // Dress-Up Boutique: design a princess-style character.
-// window.DressDesigner = { defaults(), draw(ctx, x, y, design, opts), open(design, onSave) }
+// window.DressDesigner = { defaults(), draw(ctx, x, y, design, opts), open(design, onSave, opts) }
+// open() takes opts.shop = { kind, items, state(), buy(id, cb) } from the game: options listed in the shop
+// catalogue are locked until bought (or found in the daily chest). Without opts.shop everything is free.
 (function () {
   'use strict';
 
@@ -9,11 +11,13 @@
   var DRESS_COLS = ['#FF8FB8', '#E0447F', '#FF4F6D', '#FF7A45', '#FFD66B', '#7BD389', '#5ED6C4', '#3B82F6', '#9B6BFF', '#FFFFFF'];
   var TRIM_COLS = ['#FFD66B', '#FFFFFF', '#FF8FB8', '#E0447F', '#9B6BFF', '#3B82F6', '#5ED6C4', '#7BD389', '#FF7A45', '#1B2A49'];
   var SHOE_COLS = ['#FF4F9A', '#FF4F6D', '#FFD66B', '#FFFFFF', '#5ED6C4', '#3B82F6', '#9B6BFF', '#1B2A49'];
-  var RANGES = { hair: 6, skin: 5, head: 5, dress: 6, back: 3, item: 4 };
+  var RANGES = { hair: 6, skin: 5, head: 6, dress: 6, back: 4, item: 5 };
   var COLOR_KEYS = ['hairColor', 'dressColor', 'trimColor', 'shoeColor'];
+  var RAINBOW = ['#FF4F6D', '#FF9F43', '#FFD66B', '#7BD389', '#5AA9FF', '#9B6BFF'];
 
+  // Only options that are free for everyone (see dev/shop.js): bow, A-line dress, nothing on the back, flower.
   function defaults() {
-    return { hair: 0, hairColor: '#5A3418', skin: 1, head: 1, dress: 0, dressColor: '#FF8FB8', trimColor: '#FFD66B', back: 0, item: 1, shoeColor: '#FF4F9A' };
+    return { hair: 0, hairColor: '#5A3418', skin: 1, head: 3, dress: 1, dressColor: '#FF8FB8', trimColor: '#FFD66B', back: 0, item: 2, shoeColor: '#FF4F9A' };
   }
   function isHex(v) { return typeof v === 'string' && /^#[0-9a-fA-F]{6}$/.test(v); }
   function norm(d) {
@@ -78,6 +82,17 @@
       ctx.moveTo(-11, -49); ctx.lineTo(11, -49);
       ctx.quadraticCurveTo(31, -32, 33, -10); ctx.quadraticCurveTo(0, -2, -33, -10); ctx.quadraticCurveTo(-31, -32, -11, -49);
       ctx.closePath(); fs(ctx, d.trimColor);
+    } else if (d.back === 3) { // butterfly wings (legendary)
+      var fl = Math.sin(t * 5) * 0.09;
+      [-1, 1].forEach(function (sd) {
+        ctx.save(); ctx.scale(sd, 1);
+        oval(ctx, 26, -59, 21, 14, -0.55 + fl, '#B98CFF');
+        oval(ctx, 21, -35, 13.5, 10, 0.5 - fl, '#5ED6C4');
+        oval(ctx, 28, -60, 11, 6.5, -0.55 + fl, '#FF8FB8', 1.6);
+        circ(ctx, 37, -67, 2.6, '#FFD66B', 1.4);
+        circ(ctx, 23.5, -34, 3.4, '#FFFFFF', 1.4);
+        ctx.restore();
+      });
     }
   }
   function drawBackHair(ctx, d) {
@@ -199,12 +214,24 @@
       ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(11, -7); ctx.lineTo(10, 7); ctx.closePath(); fs(ctx, t2);
       circ(ctx, 0, 0, 3.4, t2);
       ctx.restore();
+    } else if (d.head === 5) { // rainbow crown (legendary)
+      var i;
+      ctx.save(); rainbowCrown(ctx); ctx.clip();
+      for (i = 0; i < 6; i++) { ctx.fillStyle = RAINBOW[i]; ctx.fillRect(-15.2 + i * 5.07, -110, 5.4, 26); }
+      ctx.restore();
+      rainbowCrown(ctx); fs(ctx, null);
+      circ(ctx, -15, -101, 1.9, '#FFFFFF', 1.3); circ(ctx, 15, -101, 1.9, '#FFFFFF', 1.3);
+      star(ctx, 0, -106.5, 4.8, 2.2, '#FFFFFF');
     } else { // flower
       petals(ctx, -13, -85, t2);
     }
     ctx.restore();
   }
-  function drawItem(ctx, d) {
+  function rainbowCrown(ctx) {
+    ctx.beginPath(); ctx.moveTo(-12.5, -86.5); ctx.lineTo(-15, -101); ctx.lineTo(-7, -94); ctx.lineTo(0, -105); ctx.lineTo(7, -94); ctx.lineTo(15, -101); ctx.lineTo(12.5, -86.5);
+    ctx.quadraticCurveTo(0, -91, -12.5, -86.5); ctx.closePath();
+  }
+  function drawItem(ctx, d, t) {
     if (d.item === 1) {
       limb(ctx, 19, -33, 27, -55, '#FFFFFF', 1.8);
       star(ctx, 27.5, -58.5, 7.2, 3.3, '#FFD66B');
@@ -222,6 +249,15 @@
       ctx.beginPath(); ctx.arc(20.6, -39, 0.95, 0, TAU); ctx.fill();
       ctx.beginPath(); ctx.arc(25.4, -39, 0.95, 0, TAU); ctx.fill();
       ctx.beginPath(); ctx.arc(23, -36.3, 0.9, 0, TAU); ctx.fill();
+    } else if (d.item === 4) { // magic staff (legendary)
+      var tw = 0.75 + Math.sin((t || 0) * 5) * 0.25;
+      limb(ctx, 16.5, -15, 26, -58, '#9B6BFF', 2.4);
+      ctx.beginPath(); ctx.arc(27.2, -64.5, 7.4, 0.2 * Math.PI, 0.95 * Math.PI);
+      ctx.lineWidth = 5.2; ctx.strokeStyle = OUT; ctx.stroke(); ctx.lineWidth = 2.2; ctx.strokeStyle = '#FFC933'; ctx.stroke();
+      circ(ctx, 27.2, -65.5, 5.8, '#7FE3F2', 2);
+      ctx.beginPath(); ctx.arc(25.3, -67.5, 1.7, 0, TAU); ctx.fillStyle = '#FFFFFF'; ctx.fill();
+      star(ctx, 36, -73.5, 3.6 * tw, 1.5 * tw, '#FFD66B');
+      star(ctx, 19, -75, 2.8 * (1.5 - tw), 1.2 * (1.5 - tw), '#FF8FB8');
     }
   }
 
@@ -263,7 +299,7 @@
     drawFace(ctx);
     drawFrontHair(ctx, d);
     drawHeadwear(ctx, d);
-    drawItem(ctx, d);
+    drawItem(ctx, d, t);
     ctx.restore();
   }
 
@@ -271,6 +307,7 @@
   var CSS = '' +
     '.dd-ov{position:fixed;left:0;top:0;right:0;bottom:0;z-index:30;background:#FFF3D6;color:#1B2A49;display:flex;gap:12px;padding:12px;box-sizing:border-box;font-family:inherit;touch-action:none}' +
     '.dd-ov *{box-sizing:border-box}' +
+    '.dd-ov .py{font-family:system-ui,"Segoe UI",Roboto,"Noto Sans",Arial,sans-serif}' +
     '.dd-left{flex:none;width:36%;min-width:250px;max-width:470px;display:flex;flex-direction:column;gap:8px}' +
     '.dd-title{margin:0;font-size:30px;line-height:1.1;font-weight:700}' +
     '.dd-stage{flex:1;min-height:0;position:relative;background:#FFE3EE;border:4px solid #1B2A49;border-radius:24px;overflow:hidden}' +
@@ -278,39 +315,65 @@
     '.dd-acts{display:flex;gap:8px}' +
     '.dd-btn{flex:1;min-width:0;height:54px;padding:0 10px;border-radius:999px;border:4px solid #1B2A49;background:#fff;color:#1B2A49;font-family:inherit;font-size:20px;font-weight:700;cursor:pointer;white-space:nowrap}' +
     '.dd-btn.dd-pri{background:#FFD66B}' +
+    '.dd-btn.dd-dis,.dd-btn:disabled{opacity:.6}' +
     '.dd-btn:active,.dd-th:active,.dd-sw:active{transform:scale(.95)}' +
-    '.dd-right{flex:1;min-width:0;overflow-y:auto;-webkit-overflow-scrolling:touch;touch-action:pan-y;display:flex;flex-direction:column;gap:10px;padding-right:4px}' +
+    '.dd-side{flex:1;min-width:0;min-height:0;display:flex;flex-direction:column;gap:8px}' +
+    '.dd-right{flex:1;min-width:0;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;touch-action:pan-y;display:flex;flex-direction:column;gap:10px;padding-right:4px}' +
     '.dd-grp{flex:none;background:#fff;border:3px solid #1B2A49;border-radius:20px;padding:8px 12px 12px}' +
     '.dd-lbl{margin:0 0 6px;font-size:18px;font-weight:700}' +
     '.dd-row{display:flex;flex-wrap:wrap;gap:10px;padding:2px}' +
-    '.dd-th{width:66px;height:70px;padding:0;border-radius:16px;border:3px solid #1B2A49;background:#EEF8FF;cursor:pointer;display:flex;align-items:center;justify-content:center}' +
+    '.dd-th{position:relative;width:66px;height:70px;padding:0;border-radius:16px;border:3px solid #1B2A49;background:#EEF8FF;cursor:pointer;display:flex;align-items:center;justify-content:center}' +
     '.dd-th canvas{width:56px;height:60px;display:block;pointer-events:none}' +
+    '.dd-th.dd-r1{border-color:#5AA9FF}.dd-th.dd-r2{border-color:#9B6BFF}.dd-th.dd-r3{border-color:#FFC933}' +
+    '.dd-th.dd-lock{background:#ECE7DA}' +
     '.dd-th.dd-on{background:#FFD66B;box-shadow:0 0 0 3px #1B2A49}' +
+    '.dd-bdg{position:absolute;left:50%;bottom:1px;transform:translateX(-50%);background:#FFD66B;color:#1B2A49;border:2px solid #1B2A49;border-radius:999px;padding:0 6px;font-size:13px;font-weight:700;line-height:1.3;white-space:nowrap;pointer-events:none}' +
     '.dd-sw{width:48px;height:48px;border-radius:50%;border:3px solid #1B2A49;padding:0;cursor:pointer}' +
     '.dd-sw.dd-on{outline:4px solid #1B2A49;outline-offset:3px}' +
-    '@media (max-height:560px),(max-width:860px){.dd-ov{gap:8px;padding:8px}.dd-title{font-size:22px}.dd-btn{height:48px;font-size:17px;border-width:3px}.dd-left{gap:6px}.dd-lbl{font-size:16px}}' +
+    // buy bar: sits under the option list while a locked option is being tried on
+    '.dd-buy{flex:none;background:#fff;border:4px solid #1B2A49;border-radius:20px;padding:8px 12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}' +
+    '.dd-buy-txt{flex:1;min-width:150px;font-size:17px;font-weight:600;line-height:1.25}' +
+    '.dd-buy-name b{font-size:20px}' +
+    '.dd-buy-sum{font-size:20px;font-weight:700}' +
+    '.dd-buy-msg{color:#B3122F}' +
+    '.dd-buy-btns{display:flex;gap:8px;flex:none}' +
+    '.dd-buy .dd-btn{flex:none;height:52px;padding:0 16px}' +
+    '.dd-tag{display:inline-block;margin-left:6px;padding:0 8px;border:2px solid #1B2A49;border-radius:999px;font-size:13px;font-weight:700;line-height:1.4;vertical-align:middle;white-space:nowrap}' +
+    '.dd-t1{background:#CFE6FF}.dd-t2{background:#E2D6FF}.dd-t3{background:#FFE9A8}' +
+    '.dd-shake{animation:dd-shake .45s}' +
+    '@keyframes dd-shake{0%,100%{transform:translateX(0)}20%{transform:translateX(-8px)}40%{transform:translateX(8px)}60%{transform:translateX(-5px)}80%{transform:translateX(5px)}}' +
+    '@media (max-height:560px),(max-width:860px){.dd-ov{gap:8px;padding:8px}.dd-title{font-size:22px}.dd-btn{height:48px;font-size:17px;border-width:3px}.dd-left{gap:6px}.dd-lbl{font-size:16px}' +
+      '.dd-buy{padding:6px 10px;border-width:3px}.dd-buy-txt{font-size:15px}.dd-buy-name b{font-size:17px}.dd-buy-sum{font-size:18px}}' +
     '@media (orientation:portrait) and (max-width:700px){.dd-ov{flex-direction:column}.dd-left{width:auto;max-width:none;height:46%}}';
 
   var GROUPS = [
     { key: 'hair', label: 'Hair', view: 'head', names: ['Long', 'Pigtails', 'Bun', 'Bob', 'Curly', 'Ponytail'] },
     { key: 'hairColor', label: 'Hair colour', colors: HAIR_COLS },
     { key: 'skin', label: 'Skin', skins: true },
-    { key: 'head', label: 'On top', view: 'head', names: ['Nothing', 'Crown', 'Tiara', 'Bow', 'Flower'] },
+    { key: 'head', label: 'On top', view: 'head', names: ['Nothing', 'Crown', 'Tiara', 'Bow', 'Flower', 'Rainbow crown'] },
     { key: 'dress', label: 'Dress', view: 'body', names: ['Ball gown', 'A-line dress', 'Fairy dress', 'Mermaid dress', 'Sporty outfit', 'Ruffle dress'] },
     { key: 'dressColor', label: 'Dress colour', colors: DRESS_COLS },
     { key: 'trimColor', label: 'Second colour', colors: TRIM_COLS },
-    { key: 'back', label: 'Wings or cape', view: 'body', names: ['Nothing', 'Fairy wings', 'Cape'] },
-    { key: 'item', label: 'In hand', view: 'body', names: ['Nothing', 'Star wand', 'Flower', 'Teddy'] },
+    { key: 'back', label: 'Wings or cape', view: 'body', names: ['Nothing', 'Fairy wings', 'Cape', 'Butterfly wings'] },
+    { key: 'item', label: 'In hand', view: 'body', names: ['Nothing', 'Star wand', 'Flower', 'Teddy', 'Magic staff'] },
     { key: 'shoeColor', label: 'Shoes', colors: SHOE_COLS }
   ];
+  var RARE_NAMES = ['', 'Rare', 'Epic', 'Legendary'];
 
   var current = null; // the open designer, if any
 
   function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text) e.textContent = text; return e; }
+  function esc(s) { return String(s === undefined || s === null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+  function sfx(name) { try { if (window.Sfx && typeof window.Sfx.play === 'function') window.Sfx.play(name); } catch (e) {} }
   function pick(list) { return list[Math.floor(Math.random() * list.length)]; }
-  function randomDesign() {
-    var o = {}, k;
-    for (k in RANGES) o[k] = Math.floor(Math.random() * RANGES[k]);
+  // allowed(key, value) says whether an option may be used; without it every option may.
+  function randomDesign(allowed) {
+    var o = {}, k, i, ok;
+    for (k in RANGES) {
+      ok = [];
+      for (i = 0; i < RANGES[k]; i++) if (!allowed || allowed(k, i)) ok.push(i);
+      o[k] = ok.length ? pick(ok) : defaults()[k];
+    }
     o.hairColor = pick(HAIR_COLS); o.dressColor = pick(DRESS_COLS); o.shoeColor = pick(SHOE_COLS);
     do { o.trimColor = pick(TRIM_COLS); } while (o.trimColor.toLowerCase() === o.dressColor.toLowerCase());
     return o;
@@ -325,15 +388,24 @@
     current = null;
   }
 
-  function open(design, onSave) {
+  function open(design, onSave, opts) {
     close();
     if (!document.getElementById('dd-style')) {
-      var st = document.createElement('style'); st.id = 'dd-style'; st.textContent = CSS; document.head.appendChild(st);
+      var stl = document.createElement('style'); stl.id = 'dd-style'; stl.textContent = CSS; document.head.appendChild(stl);
     }
+    // The shop is optional. Without it every option is free, as before.
+    var shop = (opts && opts.shop && opts.shop.items && typeof opts.shop.state === 'function') ? opts.shop : null;
+    var kind = (shop && shop.kind) ? String(shop.kind) : 'outfit';
+    var st = null;        // { coins, lv, owned } read again from the game at every refresh
+    var bought = {};      // bought during this visit (the game's own list can arrive a moment later)
+    var lastOk = {};      // per option group: the last choice the player really has
+    var focusKey = null;  // which tried-on locked option the buy bar is about
+    var barMsg = '', buying = null, cheerUntil = 0, cheerHtml = '', lastSig = '', lastPoll = 0;
+
     var d = norm(design);
     var dpr = Math.min(2, window.devicePixelRatio || 1);
     var root = el('div', 'dd-ov'); root.setAttribute('role', 'dialog'); root.setAttribute('aria-label', 'Dress-Up Boutique');
-    var left = el('div', 'dd-left'), right = el('div', 'dd-right');
+    var left = el('div', 'dd-left'), side = el('div', 'dd-side'), right = el('div', 'dd-right');
     var stage = el('div', 'dd-stage'), prev = el('canvas', 'dd-prev');
     prev.setAttribute('aria-label', 'Your character');
     stage.appendChild(prev);
@@ -343,16 +415,152 @@
     var acts1 = el('div', 'dd-acts'), acts2 = el('div', 'dd-acts');
     acts1.appendChild(surprise); acts2.appendChild(back); acts2.appendChild(done);
     left.appendChild(el('h2', 'dd-title', 'Dress-Up Boutique')); left.appendChild(stage); left.appendChild(acts1); left.appendChild(acts2);
-    root.appendChild(left); root.appendChild(right);
+    side.appendChild(right);
+    root.appendChild(left); root.appendChild(side);
 
-    var buttons = []; // {btn, key, value, canvas?}
+    // ----- shop helpers -----
+    function alive() { return !!current && current.root === root; }
+    function readState() {
+      var s = null, owned = {}, i;
+      try { s = shop.state(); } catch (e) {}
+      s = s || {};
+      if (Array.isArray(s.owned)) { for (i = 0; i < s.owned.length; i++) owned[s.owned[i]] = true; }
+      else if (s.owned && typeof s.owned === 'object') owned = s.owned;
+      return { coins: Math.max(0, Math.floor(+s.coins || 0)), lv: Math.max(1, Math.floor(+s.lv || 1)), owned: owned };
+    }
+    function sig(s) { return s.coins + '|' + s.lv + '|' + Object.keys(s.owned).length; }
+    function idOf(key, value) { return kind + '.' + key + '.' + value; }
+    function itemOf(key, value) { return (shop && typeof value === 'number') ? (shop.items[idOf(key, value)] || null) : null; }
+    function locked(key, value) {
+      var id = idOf(key, value);
+      return !!itemOf(key, value) && !(st && st.owned[id]) && !bought[id];
+    }
+    function lockedKeys() { var out = [], k; for (k in RANGES) if (locked(k, d[k])) out.push(k); return out; }
+    function badgeText(o) {
+      if (o.item.chest) return '🎁';
+      return st.lv >= (+o.item.lv || 1) ? '⭐ ' + (+o.item.cost || 0) : 'Lv ' + o.item.lv;
+    }
+    function nameHtml(it) {
+      return '<b>' + esc(it.en) + '</b> · ' + esc(it.zh) + ' <span class="py">' + esc(it.py) + '</span> · ' + esc(it.ms) +
+        (it.rare ? ' <span class="dd-tag dd-t' + it.rare + '">' + RARE_NAMES[it.rare] + '</span>' : '');
+    }
+
+    var bar = null, barTxt = null, buyBtn = null, offBtn = null;
+    if (shop) {
+      st = readState(); lastSig = sig(st);
+      // never start with something the player does not have
+      (function () { var k, def = defaults(); for (k in RANGES) if (locked(k, d[k])) d[k] = def[k]; })();
+      bar = el('div', 'dd-buy'); bar.setAttribute('aria-live', 'polite'); bar.style.display = 'none';
+      barTxt = el('div', 'dd-buy-txt');
+      var barBtns = el('div', 'dd-buy-btns');
+      offBtn = el('button', 'dd-btn', 'Take off'); offBtn.type = 'button';
+      buyBtn = el('button', 'dd-btn dd-pri', 'Buy'); buyBtn.type = 'button';
+      barBtns.appendChild(offBtn); barBtns.appendChild(buyBtn);
+      bar.appendChild(barTxt); bar.appendChild(barBtns);
+      side.appendChild(bar);
+      offBtn.addEventListener('click', function () {
+        sfx('tap');
+        if (focusKey && locked(focusKey, d[focusKey])) d[focusKey] = lastOk[focusKey];
+        barMsg = ''; refresh();
+      });
+      buyBtn.addEventListener('click', doBuy);
+    }
+    lastOk = copy(d);
+
+    function renderBar() {
+      if (!shop) return;
+      var keys = lockedKeys(), key, it, html, cost, need, canBuy = false;
+      if (!keys.length) {
+        done.textContent = 'Done'; done.classList.remove('dd-dis');
+        if (Date.now() < cheerUntil) { barTxt.innerHTML = cheerHtml; buyBtn.style.display = 'none'; offBtn.style.display = 'none'; bar.style.display = ''; }
+        else bar.style.display = 'none';
+        return;
+      }
+      key = keys.indexOf(focusKey) >= 0 ? focusKey : keys[0]; focusKey = key;
+      it = itemOf(key, d[key]); cost = +it.cost || 0; need = +it.lv || 1;
+      html = '<div class="dd-buy-name">' + nameHtml(it) + '</div>';
+      if (it.chest) html += '<div class="dd-buy-info">🎁 Find it in the daily chest.</div>';
+      else if (st.lv < need) html += '<div class="dd-buy-info">🔒 Reach level ' + need + ' to buy it. You are level ' + st.lv + '.</div>';
+      else if (st.coins < cost) {
+        html += '<div class="dd-buy-info">It costs ⭐ ' + cost + '. You have ⭐ ' + st.coins + '.</div>' +
+          '<div class="dd-buy-sum">' + cost + ' − ' + st.coins + ' = ' + (cost - st.coins) + ' more ⭐ to find</div>';
+      } else {
+        canBuy = true;
+        html += '<div class="dd-buy-sum">⭐ ' + st.coins + ' − ' + cost + ' = ' + (st.coins - cost) + ' left</div>';
+      }
+      if (keys.length > 1) html += '<div class="dd-buy-info">And ' + (keys.length - 1) + ' more to buy or take off.</div>';
+      if (barMsg) html += '<div class="dd-buy-msg">' + esc(barMsg) + '</div>';
+      barTxt.innerHTML = html;
+      buyBtn.style.display = canBuy ? '' : 'none';
+      buyBtn.disabled = !!buying; buyBtn.textContent = buying ? 'Buying…' : 'Buy ⭐ ' + cost;
+      offBtn.style.display = '';
+      bar.style.display = '';
+      done.textContent = '🔒 Done'; done.classList.add('dd-dis');
+    }
+    function nudge() { // Done was tapped while something not owned is still on
+      barMsg = 'Buy it first, or tap Take off.';
+      renderBar(); sfx('deny');
+      bar.classList.remove('dd-shake'); void bar.offsetWidth; bar.classList.add('dd-shake');
+    }
+    function doBuy() {
+      var key = focusKey, value = key ? d[key] : null, it = key ? itemOf(key, value) : null, id, timer;
+      if (buying || !it || !locked(key, value)) return;
+      id = idOf(key, value);
+      buying = id; barMsg = ''; renderBar();
+      timer = setTimeout(function () {
+        if (buying !== id) return;
+        buying = null; barMsg = 'No answer yet. Try again.';
+        if (alive()) renderBar();
+      }, 6000);
+      function answer(ok, why) {
+        clearTimeout(timer);
+        if (buying === id) buying = null;
+        if (!alive()) return;
+        if (ok || why === 'owned') {
+          bought[id] = true;
+          if (d[key] === value) lastOk[key] = value;
+          barMsg = '';
+          cheerHtml = '<div class="dd-buy-name">🎉 ' + nameHtml(it) + '</div><div class="dd-buy-sum">It is yours now!</div>';
+          cheerUntil = Date.now() + 2400;
+          setTimeout(function () { if (alive()) renderBar(); }, 2500);
+          sfx('buy');
+        } else {
+          barMsg = why === 'stars' ? 'Not enough stars yet.' : why === 'level' ? 'Your level is not high enough yet.' :
+            why === 'chest' ? 'This one comes from the daily chest.' : 'That did not work. Try again.';
+          sfx('deny');
+        }
+        refresh();
+      }
+      try {
+        if (typeof shop.buy !== 'function') throw new Error('no buy');
+        shop.buy(id, answer);
+      } catch (e) { answer(false, 'unknown'); }
+    }
+    // keep the tapped button in view when the buy bar opens under the list
+    function reveal(btn) {
+      var r = right.getBoundingClientRect(), q = btn.getBoundingClientRect();
+      if (q.bottom > r.bottom - 6) right.scrollTop += q.bottom - r.bottom + 12;
+    }
+
+    var buttons = []; // {btn, key, value, canvas?, item?, bdg?, name}
     GROUPS.forEach(function (g) {
       var grp = el('div', 'dd-grp'), row = el('div', 'dd-row'), lblId = 'dd-lbl-' + g.key, lbl = el('p', 'dd-lbl', g.label), i, b, c;
       lbl.id = lblId; row.setAttribute('role', 'group'); row.setAttribute('aria-labelledby', lblId);
       function add(btn, value, canvas) {
+        var it = itemOf(g.key, value), bdg = null;
         btn.type = 'button';
-        btn.addEventListener('click', function () { d[g.key] = value; refresh(); });
-        buttons.push({ btn: btn, key: g.key, value: value, canvas: canvas, view: g.view });
+        if (it) {
+          if (it.rare) btn.classList.add('dd-r' + it.rare);
+          bdg = el('span', 'dd-bdg'); bdg.style.display = 'none'; btn.appendChild(bdg);
+        }
+        btn.addEventListener('click', function () {
+          sfx('tap');
+          d[g.key] = value; barMsg = '';
+          if (locked(g.key, value)) focusKey = g.key; else lastOk[g.key] = value;
+          refresh();
+          if (it) reveal(btn);
+        });
+        buttons.push({ btn: btn, key: g.key, value: value, canvas: canvas, view: g.view, item: it, bdg: bdg, name: btn.getAttribute('aria-label') || '' });
         row.appendChild(btn);
       }
       if (g.view) {
@@ -370,10 +578,17 @@
     });
 
     function refresh() {
+      if (shop) { st = readState(); lastSig = sig(st); }
       buttons.forEach(function (o) {
-        var on = String(d[o.key]).toLowerCase() === String(o.value).toLowerCase();
+        var on = String(d[o.key]).toLowerCase() === String(o.value).toLowerCase(), lk, txt;
         if (on) o.btn.classList.add('dd-on'); else o.btn.classList.remove('dd-on');
         o.btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+        if (o.bdg) {
+          lk = locked(o.key, o.value); txt = lk ? badgeText(o) : '';
+          o.bdg.textContent = txt; o.bdg.style.display = lk ? '' : 'none';
+          if (lk) o.btn.classList.add('dd-lock'); else o.btn.classList.remove('dd-lock');
+          o.btn.setAttribute('aria-label', o.name + (lk ? ', locked, ' + txt : ''));
+        }
         if (o.canvas) {
           var c = o.canvas.getContext('2d'), v = copy(d);
           v[o.key] = o.value;
@@ -381,6 +596,7 @@
           if (o.view === 'head') draw(c, 28, 91, v, { scale: 0.8 }); else draw(c, 28, 57, v, { scale: 0.5 });
         }
       });
+      renderBar();
     }
     function sizePrev() {
       var w = stage.clientWidth, h = stage.clientHeight;
@@ -397,12 +613,21 @@
         c.beginPath(); c.ellipse(w / 2, fy + 2 * sc, Math.min(w * 0.42, 46 * sc), 9 * sc, 0, 0, TAU); c.fillStyle = '#FFC4DA'; c.fill();
         draw(c, w / 2, fy, d, { scale: sc, t: (ts || 0) / 1000 });
       }
+      // stars, level or owned items can change while the designer is open (a quest reward, the server's answer)
+      if (shop && (ts || 0) - lastPoll > 400) { lastPoll = ts || 0; if (sig(readState()) !== lastSig) refresh(); }
       current.raf = requestAnimationFrame(frame);
     }
 
-    surprise.addEventListener('click', function () { d = randomDesign(); refresh(); });
-    back.addEventListener('click', function () { close(); });
+    surprise.addEventListener('click', function () {
+      sfx('tap');
+      d = randomDesign(shop ? function (k, v) { return !locked(k, v); } : null);
+      lastOk = copy(d); barMsg = '';
+      refresh();
+    });
+    back.addEventListener('click', function () { sfx('tap'); close(); });
     done.addEventListener('click', function () {
+      if (shop) { st = readState(); if (lockedKeys().length) { nudge(); return; } }
+      sfx('tap');
       var out = copy(d);
       close();
       if (typeof onSave === 'function') onSave(out);

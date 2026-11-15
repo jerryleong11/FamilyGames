@@ -1,5 +1,8 @@
 // Car Garage: design a race car. Exposes window.CarDesigner { defaults, draw, open }.
 // A design is a flat object: { body, color, color2, decal, wheel, wheelColor, spoiler, num, extra }.
+// open(design, onSave, opts): opts.driver is the helmet colour; opts.shop = { kind, items, state(), buy(id, cb) }
+// comes from the game and locks the options listed in the shop catalogue until they are bought (or found in
+// the daily chest). Without opts.shop everything is free.
 (function () {
   'use strict';
 
@@ -7,10 +10,12 @@
   var FONT = "Fredoka, 'Baloo 2', 'Trebuchet MS', sans-serif";
   var COLORS = ['#FF4F6D', '#FF7A45', '#FFC933', '#4FA05A', '#5ED6C4', '#3B82F6', '#9B6BFF', '#FF8FB8', '#FFFFFF', '#2B3046'];
   var RIMS = ['#E8ECF2', '#FFC933', '#FF4F6D', '#5ED6C4', '#9B6BFF', '#FF7A45'];
-  var DECALS = ['None', 'Stripes', 'Flames', 'Bolt', 'Stars', 'Checks'];
+  var DECALS = ['None', 'Stripes', 'Flames', 'Bolt', 'Stars', 'Checks', 'Rainbow'];
   var SPOILERS = ['None', 'Small', 'Big wing'];
-  var EXTRAS = ['None', 'Roof light', 'Flag', 'Booster'];
-  var WHEELS = ['Classic', 'Star', 'Disc', 'Chunky', 'Turbine'];
+  var EXTRAS = ['None', 'Roof light', 'Flag', 'Booster', 'Rainbow trail'];
+  var WHEELS = ['Classic', 'Star', 'Disc', 'Chunky', 'Turbine', 'Golden'];
+  var RAINBOW = ['#FF4F6D', '#FF9F43', '#FFD66B', '#4FA05A', '#5AA9FF', '#9B6BFF'];
+  var GOLD = '#FFC933';
 
   function isHex(v) { return typeof v === 'string' && /^#[0-9a-fA-F]{6}$/.test(v); }
   function idx(v, n, def) { v = parseInt(v, 10); return (v >= 0 && v < n) ? v : def; }
@@ -144,12 +149,14 @@
   // ---------- parts ----------
   function drawWheel(c, x, r, style, rim, ang) {
     var i, a, k = r * 0.62;
+    if (style === 5) rim = GOLD;                     // golden wheels are gold whatever the wheel colour
     c.save(); c.translate(x, -r);
     if (style === 3) {
       c.fillStyle = TIRE; c.strokeStyle = NAVY; c.lineWidth = 2;
       for (i = 0; i < 10; i++) { c.save(); c.rotate(ang + i * TAU / 10); rr(c, -2.6, -r - 2.4, 5.2, 5, 1.5); c.fill(); c.stroke(); c.restore(); }
     }
     c.beginPath(); c.arc(0, 0, r, 0, TAU); c.fillStyle = TIRE; c.fill(); ol(c, 3);
+    if (style === 5) { c.beginPath(); c.arc(0, 0, r * 0.83, 0, TAU); c.lineWidth = Math.max(1.6, r * 0.11); c.strokeStyle = '#FFE27A'; c.stroke(); } // gold tyre trim
     c.rotate(ang);
     c.beginPath(); c.arc(0, 0, k, 0, TAU); c.fillStyle = rim; c.fill(); ol(c, 2);
     c.strokeStyle = NAVY; c.lineWidth = 2;
@@ -164,6 +171,11 @@
     } else if (style === 3) {
       c.lineWidth = Math.max(3, r * 0.2); c.beginPath(); c.moveTo(-k, 0); c.lineTo(k, 0); c.moveTo(0, -k); c.lineTo(0, k); c.stroke();
       c.beginPath(); c.arc(0, 0, r * 0.2, 0, TAU); c.fillStyle = rim; c.fill(); c.lineWidth = 2; c.stroke();
+    } else if (style === 5) {                        // golden (legendary): fine spokes and a pale star
+      c.strokeStyle = shade(GOLD, -0.35); c.lineWidth = 1.6; c.beginPath();
+      for (i = 0; i < 8; i++) { a = i * TAU / 8; c.moveTo(0, 0); c.lineTo(Math.cos(a) * k, Math.sin(a) * k); }
+      c.stroke();
+      star(c, 0, 0, k * 0.68, k * 0.3, 0); c.fillStyle = '#FFF6C9'; c.fill(); c.lineWidth = 1.5; c.strokeStyle = NAVY; c.stroke();
     } else {
       c.beginPath();
       for (i = 0; i < 6; i++) { a = i * TAU / 6; c.moveTo(0, 0); c.quadraticCurveTo(Math.cos(a + 0.7) * k * 0.6, Math.sin(a + 0.7) * k * 0.6, Math.cos(a) * k, Math.sin(a) * k); }
@@ -205,6 +217,10 @@
       for (x = b.x0 - 2; x < b.x0 + w * 0.32; x += q, n++) {
         for (y = b.y0 - 6, i = 0; y < b.y1 + 6; y += q, i++) { c.fillStyle = (n + i) % 2 ? '#FFFFFF' : NAVY; c.fillRect(x, y, q, q); }
       }
+    } else if (d.decal === 6) {                      // rainbow (legendary): six bands along the side
+      var bh = h * 0.72 / 6, by0 = b.y0 + h * 0.1;
+      for (i = 0; i < 6; i++) { c.fillStyle = RAINBOW[i]; c.fillRect(b.x0 - 6, by0 + i * bh, w + 12, bh + 0.4); }
+      c.fillStyle = NAVY; c.fillRect(b.x0 - 6, by0 - 1.2, w + 12, 1.2); c.fillRect(b.x0 - 6, by0 + 6 * bh, w + 12, 1.2);
     }
   }
 
@@ -236,7 +252,22 @@
 
     ctx.fillStyle = 'rgba(27,42,73,0.16)'; ctx.beginPath(); ctx.ellipse(0, 1.5, 64, 5, 0, 0, TAU); ctx.fill();
 
-    if (mv && d.extra !== 3) {                       // exhaust puffs
+    if (d.extra === 4) {                             // rainbow trail (legendary): a ribbon flying behind the car
+      var tl = mv ? 62 : 22, tx = B.rear.x + 6, ty = B.rear.y;
+      var ribbon = function (off, len) {
+        var n, q;
+        ctx.beginPath();
+        for (n = 0; n <= 10; n++) {
+          q = n / 10;
+          if (n) ctx.lineTo(tx - q * len, ty + off + Math.sin(t * 8 + q * 5.5) * 2.6 * q); else ctx.moveTo(tx, ty + off);
+        }
+      };
+      ctx.lineCap = 'butt';
+      ribbon(0, tl + 1.6); ctx.lineWidth = 19; ctx.strokeStyle = NAVY; ctx.stroke();
+      for (i = 0; i < 6; i++) { ribbon(-6.5 + i * 2.6, tl); ctx.lineWidth = 3; ctx.strokeStyle = RAINBOW[i]; ctx.stroke(); }
+      ctx.lineCap = 'round';
+    }
+    if (mv && d.extra !== 3 && d.extra !== 4) {      // exhaust puffs
       for (i = 0; i < 3; i++) {
         k = (t * 1.6 + i / 3) % 1;
         ctx.globalAlpha = 0.75 * (1 - k); ctx.fillStyle = '#FFFFFF'; ctx.strokeStyle = NAVY; ctx.lineWidth = 1.5;
@@ -303,13 +334,16 @@
   // ---------- designer overlay ----------
   var CSS = [
     '.cd-ov{position:fixed;left:0;top:0;right:0;bottom:0;z-index:30;background:#FFF3D6;color:#1B2A49;display:flex;gap:12px;padding:12px;font-family:inherit;touch-action:none}',
+    '.cd-ov .py{font-family:system-ui,"Segoe UI",Roboto,"Noto Sans",Arial,sans-serif}',
     '.cd-left{flex:1 1 46%;min-width:0;display:flex;flex-direction:column;gap:10px}',
     '.cd-title{margin:0;font-size:30px;line-height:1.1}',
     '.cd-stage{flex:1;min-height:0;border:4px solid #1B2A49;border-radius:22px;overflow:hidden;background:#BDE9FF}',
     '.cd-cv{display:block;width:100%;height:100%}',
     '.cd-bar{display:flex;gap:8px}',
     '.cd-bar .btn{flex:1;padding:0 10px;white-space:nowrap}',
-    '.cd-right{flex:1 1 54%;min-width:0;background:#fff;border:4px solid #1B2A49;border-radius:22px;padding:12px 14px 16px;overflow-y:auto;touch-action:pan-y;-webkit-overflow-scrolling:touch}',
+    '.cd-bar .btn.cd-dis{opacity:.6}',
+    '.cd-side{flex:1 1 54%;min-width:0;min-height:0;display:flex;flex-direction:column;gap:8px}',
+    '.cd-right{flex:1;min-height:0;background:#fff;border:4px solid #1B2A49;border-radius:22px;padding:12px 14px 16px;overflow-y:auto;touch-action:pan-y;-webkit-overflow-scrolling:touch}',
     '.cd-lbl{font-size:18px;font-weight:700;margin:12px 0 6px}',
     '.cd-lbl:first-child{margin-top:0}',
     '.cd-row{display:flex;flex-wrap:wrap;gap:8px;padding:2px}',
@@ -319,30 +353,215 @@
     '.cd-pic canvas{display:block}',
     '.cd-pic.on{background:#FFD66B;outline:4px solid #1B2A49;outline-offset:2px}',
     '.cd-pic:active{transform:scale(.96)}',
-    '@media (max-width:900px),(max-height:560px){.cd-title{font-size:24px}.cd-bar .btn{height:50px;font-size:17px}.cd-lbl{font-size:16px}.cd-ov{gap:8px;padding:8px}}',
-    '@media (orientation:portrait) and (max-width:700px){.cd-ov{flex-direction:column}.cd-left{flex:0 0 46%}.cd-right{flex:1 1 auto}}'
+    '.cd-ov .cd-r1{border-color:#5AA9FF}',
+    '.cd-ov .cd-r2{border-color:#9B6BFF}',
+    '.cd-ov .cd-r3{border-color:#FFC933}',
+    '.cd-bdg{display:inline-block;margin-left:6px;background:#FFD66B;color:#1B2A49;border:2px solid #1B2A49;border-radius:999px;padding:0 7px;font-size:13px;font-weight:700;line-height:1.35;white-space:nowrap;vertical-align:middle}',
+    '.cd-pic .cd-bdg{margin:3px 0 0}',
+    // buy bar: sits under the option list while a locked option is being tried on
+    '.cd-buy{flex:none;background:#fff;border:4px solid #1B2A49;border-radius:22px;padding:8px 12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}',
+    '.cd-buy-txt{flex:1;min-width:150px;font-size:17px;font-weight:600;line-height:1.25}',
+    '.cd-buy-name b{font-size:20px}',
+    '.cd-buy-sum{font-size:20px;font-weight:700}',
+    '.cd-buy-msg{color:#B3122F}',
+    '.cd-buy-btns{display:flex;gap:8px;flex:none}',
+    '.cd-buy .btn{height:52px;padding:0 16px;white-space:nowrap}',
+    '.cd-tag{display:inline-block;margin-left:6px;padding:0 8px;border:2px solid #1B2A49;border-radius:999px;font-size:13px;font-weight:700;line-height:1.4;vertical-align:middle;white-space:nowrap}',
+    '.cd-t1{background:#CFE6FF}',
+    '.cd-t2{background:#E2D6FF}',
+    '.cd-t3{background:#FFE9A8}',
+    '.cd-shake{animation:cd-shake .45s}',
+    '@keyframes cd-shake{0%,100%{transform:translateX(0)}20%{transform:translateX(-8px)}40%{transform:translateX(8px)}60%{transform:translateX(-5px)}80%{transform:translateX(5px)}}',
+    '@media (max-width:900px),(max-height:560px){.cd-title{font-size:24px}.cd-bar .btn{height:50px;font-size:17px}.cd-lbl{font-size:16px}.cd-ov{gap:8px;padding:8px}' +
+      '.cd-buy{padding:6px 10px;border-width:3px}.cd-buy-txt{font-size:15px}.cd-buy-name b{font-size:17px}.cd-buy-sum{font-size:18px}.cd-buy .btn{font-size:17px;border-width:3px}}',
+    '@media (orientation:portrait) and (max-width:700px){.cd-ov{flex-direction:column}.cd-left{flex:0 0 46%}.cd-side{flex:1 1 auto}}'
   ].join('\n');
+  var RARE_NAMES = ['', 'Rare', 'Epic', 'Legendary'];
+  var LOCKABLE = ['body', 'decal', 'wheel', 'spoiler', 'extra']; // the option groups the shop can lock
   var current = null;
 
   function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+  function esc(s) { return String(s === undefined || s === null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+  function sfx(name) { try { if (window.Sfx && typeof window.Sfx.play === 'function') window.Sfx.play(name); } catch (e) {} }
 
   function open(design, onSave, opts) {
     if (current) current.close();
-    if (!document.getElementById('cd-style')) { var st = el('style'); st.id = 'cd-style'; st.textContent = CSS; document.head.appendChild(st); }
+    if (!document.getElementById('cd-style')) { var stl = el('style'); stl.id = 'cd-style'; stl.textContent = CSS; document.head.appendChild(stl); }
     var d = norm(design), driver = (opts && isHex(opts.driver)) ? opts.driver : '#FF7A45';
+    // The shop is optional. Without it every option is free, as before.
+    var shop = (opts && opts.shop && opts.shop.items && typeof opts.shop.state === 'function') ? opts.shop : null;
+    var kind = (shop && shop.kind) ? String(shop.kind) : 'car';
+    var st = null;        // { coins, lv, owned } read again from the game at every refresh
+    var bought = {};      // bought during this visit (the game's own list can arrive a moment later)
+    var lastOk = {};      // per option group: the last choice the player really has
+    var focusKey = null;  // which tried-on locked option the buy bar is about
+    var barMsg = '', buying = null, cheerUntil = 0, cheerHtml = '', lastSig = '', lastPoll = 0;
+
     var ov = el('div', 'cd-ov'); ov.setAttribute('role', 'dialog'); ov.setAttribute('aria-label', 'Car Garage');
-    var left = el('div', 'cd-left'), right = el('div', 'cd-right');
+    var left = el('div', 'cd-left'), side = el('div', 'cd-side'), right = el('div', 'cd-right');
     var stage = el('div', 'cd-stage'), cv = el('canvas', 'cd-cv'), bar = el('div', 'cd-bar');
     cv.setAttribute('aria-label', 'Your car');
     left.appendChild(el('h2', 'cd-title', 'Car Garage'));
     stage.appendChild(cv); left.appendChild(stage); left.appendChild(bar);
-    ov.appendChild(left); ov.appendChild(right);
+    side.appendChild(right);
+    ov.appendChild(left); ov.appendChild(side);
 
     var refreshers = [], raf = 0, closed = false;
-    function refresh() { for (var i = 0; i < refreshers.length; i++) refreshers[i](); }
+    var back = el('button', 'btn', 'Back'), rnd = el('button', 'btn', 'Surprise me'), done = el('button', 'btn primary', 'Done');
+    back.type = rnd.type = done.type = 'button';
+
+    // ----- shop helpers -----
+    function readState() {
+      var s = null, owned = {}, i;
+      try { s = shop.state(); } catch (e) {}
+      s = s || {};
+      if (Array.isArray(s.owned)) { for (i = 0; i < s.owned.length; i++) owned[s.owned[i]] = true; }
+      else if (s.owned && typeof s.owned === 'object') owned = s.owned;
+      return { coins: Math.max(0, Math.floor(+s.coins || 0)), lv: Math.max(1, Math.floor(+s.lv || 1)), owned: owned };
+    }
+    function sig(s) { return s.coins + '|' + s.lv + '|' + Object.keys(s.owned).length; }
+    function idOf(key, value) { return kind + '.' + key + '.' + value; }
+    function itemOf(key, value) { return (shop && typeof value === 'number') ? (shop.items[idOf(key, value)] || null) : null; }
+    function locked(key, value) {
+      var id = idOf(key, value);
+      return !!itemOf(key, value) && !(st && st.owned[id]) && !bought[id];
+    }
+    function lockedKeys() { var out = [], i; for (i = 0; i < LOCKABLE.length; i++) if (locked(LOCKABLE[i], d[LOCKABLE[i]])) out.push(LOCKABLE[i]); return out; }
+    function badgeText(it) {
+      if (it.chest) return '🎁';
+      return st.lv >= (+it.lv || 1) ? '⭐ ' + (+it.cost || 0) : 'Lv ' + it.lv;
+    }
+    function nameHtml(it) {
+      return '<b>' + esc(it.en) + '</b> · ' + esc(it.zh) + ' <span class="py">' + esc(it.py) + '</span> · ' + esc(it.ms) +
+        (it.rare ? ' <span class="cd-tag cd-t' + it.rare + '">' + RARE_NAMES[it.rare] + '</span>' : '');
+    }
+
+    var buyBar = null, barTxt = null, buyBtn = null, offBtn = null;
+    if (shop) {
+      st = readState(); lastSig = sig(st);
+      // never start with something the player does not have
+      (function () { var i, k, def = defaults(); for (i = 0; i < LOCKABLE.length; i++) { k = LOCKABLE[i]; if (locked(k, d[k])) d[k] = def[k]; } })();
+      buyBar = el('div', 'cd-buy'); buyBar.setAttribute('aria-live', 'polite'); buyBar.style.display = 'none';
+      barTxt = el('div', 'cd-buy-txt');
+      var barBtns = el('div', 'cd-buy-btns');
+      offBtn = el('button', 'btn', 'Put back'); offBtn.type = 'button';
+      buyBtn = el('button', 'btn primary', 'Buy'); buyBtn.type = 'button';
+      barBtns.appendChild(offBtn); barBtns.appendChild(buyBtn);
+      buyBar.appendChild(barTxt); buyBar.appendChild(barBtns);
+      side.appendChild(buyBar);
+      offBtn.addEventListener('click', function () {
+        sfx('tap');
+        if (focusKey && locked(focusKey, d[focusKey])) d[focusKey] = lastOk[focusKey];
+        barMsg = ''; refresh();
+      });
+      buyBtn.addEventListener('click', doBuy);
+    }
+    LOCKABLE.forEach(function (k) { lastOk[k] = d[k]; });
+
+    function renderBar() {
+      if (!shop) return;
+      var keys = lockedKeys(), key, it, html, cost, need, canBuy = false;
+      if (!keys.length) {
+        done.textContent = 'Done'; done.classList.remove('cd-dis');
+        if (Date.now() < cheerUntil) { barTxt.innerHTML = cheerHtml; buyBtn.style.display = 'none'; offBtn.style.display = 'none'; buyBar.style.display = ''; }
+        else buyBar.style.display = 'none';
+        return;
+      }
+      key = keys.indexOf(focusKey) >= 0 ? focusKey : keys[0]; focusKey = key;
+      it = itemOf(key, d[key]); cost = +it.cost || 0; need = +it.lv || 1;
+      html = '<div class="cd-buy-name">' + nameHtml(it) + '</div>';
+      if (it.chest) html += '<div class="cd-buy-info">🎁 Find it in the daily chest.</div>';
+      else if (st.lv < need) html += '<div class="cd-buy-info">🔒 Reach level ' + need + ' to buy it. You are level ' + st.lv + '.</div>';
+      else if (st.coins < cost) {
+        html += '<div class="cd-buy-info">It costs ⭐ ' + cost + '. You have ⭐ ' + st.coins + '.</div>' +
+          '<div class="cd-buy-sum">' + cost + ' − ' + st.coins + ' = ' + (cost - st.coins) + ' more ⭐ to find</div>';
+      } else {
+        canBuy = true;
+        html += '<div class="cd-buy-sum">⭐ ' + st.coins + ' − ' + cost + ' = ' + (st.coins - cost) + ' left</div>';
+      }
+      if (keys.length > 1) html += '<div class="cd-buy-info">And ' + (keys.length - 1) + ' more to buy or put back.</div>';
+      if (barMsg) html += '<div class="cd-buy-msg">' + esc(barMsg) + '</div>';
+      barTxt.innerHTML = html;
+      buyBtn.style.display = canBuy ? '' : 'none';
+      buyBtn.disabled = !!buying; buyBtn.textContent = buying ? 'Buying…' : 'Buy ⭐ ' + cost;
+      offBtn.style.display = '';
+      buyBar.style.display = '';
+      done.textContent = '🔒 Done'; done.classList.add('cd-dis');
+    }
+    function nudge() { // Done was tapped while something not owned is still on the car
+      barMsg = 'Buy it first, or tap Put back.';
+      renderBar(); sfx('deny');
+      buyBar.classList.remove('cd-shake'); void buyBar.offsetWidth; buyBar.classList.add('cd-shake');
+    }
+    function doBuy() {
+      var key = focusKey, value = key ? d[key] : null, it = key ? itemOf(key, value) : null, id, timer;
+      if (buying || !it || !locked(key, value)) return;
+      id = idOf(key, value);
+      buying = id; barMsg = ''; renderBar();
+      timer = setTimeout(function () {
+        if (buying !== id) return;
+        buying = null; barMsg = 'No answer yet. Try again.';
+        if (!closed) renderBar();
+      }, 6000);
+      function answer(ok, why) {
+        clearTimeout(timer);
+        if (buying === id) buying = null;
+        if (closed) return;
+        if (ok || why === 'owned') {
+          bought[id] = true;
+          if (d[key] === value) lastOk[key] = value;
+          barMsg = '';
+          cheerHtml = '<div class="cd-buy-name">🎉 ' + nameHtml(it) + '</div><div class="cd-buy-sum">It is yours now!</div>';
+          cheerUntil = Date.now() + 2400;
+          setTimeout(function () { if (!closed) renderBar(); }, 2500);
+          sfx('buy');
+        } else {
+          barMsg = why === 'stars' ? 'Not enough stars yet.' : why === 'level' ? 'Your level is not high enough yet.' :
+            why === 'chest' ? 'This one comes from the daily chest.' : 'That did not work. Try again.';
+          sfx('deny');
+        }
+        refresh();
+      }
+      try {
+        if (typeof shop.buy !== 'function') throw new Error('no buy');
+        shop.buy(id, answer);
+      } catch (e) { answer(false, 'unknown'); }
+    }
+    // keep the tapped button in view when the buy bar opens under the list
+    function reveal(btn) {
+      var r = right.getBoundingClientRect(), q = btn.getBoundingClientRect();
+      if (q.bottom > r.bottom - 6) right.scrollTop += q.bottom - r.bottom + 12;
+    }
+
+    function refresh() {
+      if (shop) { st = readState(); lastSig = sig(st); }
+      for (var i = 0; i < refreshers.length; i++) refreshers[i]();
+      renderBar();
+    }
     function group(title) { right.appendChild(el('div', 'cd-lbl', title)); var row = el('div', 'cd-row'); row.setAttribute('role', 'group'); row.setAttribute('aria-label', title); right.appendChild(row); return row; }
     function mark(b, on) { if (on) b.classList.add('on'); else b.classList.remove('on'); b.setAttribute('aria-pressed', on ? 'true' : 'false'); }
-    function bind(b, key, val) { b.type = 'button'; b.addEventListener('click', function () { d[key] = val; refresh(); }); refreshers.push(function () { mark(b, d[key] === val); }); }
+    function bind(b, key, val) {
+      var it = itemOf(key, val), bdg = null;
+      b.type = 'button';
+      if (it) {
+        if (it.rare) b.classList.add('cd-r' + it.rare);
+        bdg = el('span', 'cd-bdg'); bdg.style.display = 'none'; b.appendChild(bdg);
+      }
+      b.addEventListener('click', function () {
+        sfx('tap');
+        d[key] = val; barMsg = '';
+        if (locked(key, val)) focusKey = key; else if (key in lastOk) lastOk[key] = val;
+        refresh();
+        if (it) reveal(b);
+      });
+      refreshers.push(function () {
+        mark(b, d[key] === val);
+        if (bdg) {
+          var lk = locked(key, val);
+          bdg.textContent = lk ? badgeText(it) : ''; bdg.style.display = lk ? '' : 'none';
+        }
+      });
+    }
     function chips(title, key, names) {
       var row = group(title);
       names.forEach(function (n, i) { var b = el('button', 'chip', n); bind(b, key, i); row.appendChild(b); });
@@ -381,23 +600,32 @@
       if (ov.parentNode) ov.parentNode.removeChild(ov);
       if (current && current.close === close) current = null;
     }
-    var back = el('button', 'btn', 'Back'), rnd = el('button', 'btn', 'Surprise me'), done = el('button', 'btn primary', 'Done');
-    back.type = rnd.type = done.type = 'button';
-    back.addEventListener('click', close);
+    back.addEventListener('click', function () { sfx('tap'); close(); });
     rnd.addEventListener('click', function () {
       function pick(a) { return a[Math.floor(Math.random() * a.length)]; }
       function ri(n) { return Math.floor(Math.random() * n); }
-      d.body = ri(BODIES.length); d.color = pick(COLORS); do { d.color2 = pick(COLORS); } while (d.color2 === d.color);
-      d.decal = ri(DECALS.length); d.wheel = ri(WHEELS.length); d.wheelColor = pick(RIMS); d.spoiler = ri(SPOILERS.length); d.num = ri(10); d.extra = ri(EXTRAS.length);
+      // only options the player may use (everything, when there is no shop)
+      function free(key, n) { var ok = [], i; for (i = 0; i < n; i++) if (!locked(key, i)) ok.push(i); return ok.length ? pick(ok) : defaults()[key]; }
+      sfx('tap');
+      d.body = free('body', BODIES.length); d.color = pick(COLORS); do { d.color2 = pick(COLORS); } while (d.color2 === d.color);
+      d.decal = free('decal', DECALS.length); d.wheel = free('wheel', WHEELS.length); d.wheelColor = pick(RIMS); d.spoiler = free('spoiler', SPOILERS.length); d.num = ri(10); d.extra = free('extra', EXTRAS.length);
+      LOCKABLE.forEach(function (k) { lastOk[k] = d[k]; });
+      barMsg = '';
       refresh();
     });
-    done.addEventListener('click', function () { var out = norm(d); close(); if (typeof onSave === 'function') onSave(out); });
+    done.addEventListener('click', function () {
+      if (shop) { st = readState(); if (lockedKeys().length) { nudge(); return; } }
+      sfx('tap');
+      var out = norm(d); close(); if (typeof onSave === 'function') onSave(out);
+    });
     bar.appendChild(back); bar.appendChild(rnd); bar.appendChild(done);
 
     var cx = cv.getContext('2d'), t0 = (window.performance && performance.now) ? performance.now() : Date.now();
     function frame(now) {
       if (closed) return;
       raf = requestAnimationFrame(frame);
+      // stars, level or owned items can change while the garage is open (a quest reward, the server's answer)
+      if (shop && (now || 0) - lastPoll > 400) { lastPoll = now || 0; if (sig(readState()) !== lastSig) refresh(); }
       var w = stage.clientWidth, h = stage.clientHeight, dpr = Math.min(2, window.devicePixelRatio || 1);
       if (w < 2 || h < 2) return;
       if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) { cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr); }

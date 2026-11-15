@@ -38,23 +38,28 @@
 
 <!-- Town HUD -->
 <div id="hud" hidden>
-  <div class="topLeft">
-    <div class="pill dark"><span class="ico">⭐</span><span id="myStars">0</span></div>
-    <div class="pill" id="jar" title="Stars the whole family has collected"><span class="ico">🏺</span><span id="famStars">0</span><span class="small" id="famGoal"></span></div>
-    <div class="pill warn" id="tagPill" hidden></div>
-  </div>
-  <div class="topRight">
-    <div id="who" class="who"></div>
-    <button id="fsBtn" class="round" type="button" aria-label="Full screen">⛶</button>
+  <div class="topBar">
+    <div class="topLeft">
+      <div class="pill dark" title="Stars you can spend"><span class="ico">⭐</span><span id="myStars">0</span></div>
+      <div class="pill lvl" id="lvPill" title="Your level" hidden><b id="lvNum">Lv 1</b><span class="lvBar"><i id="lvFill"></i></span></div>
+      <div class="pill" id="jar" title="Stars the whole family has collected"><span class="ico">🏺</span><span id="famStars">0</span><span class="small" id="famGoal"></span></div>
+      <div class="pill warn" id="tagPill" hidden></div>
+    </div>
+    <div class="topRight">
+      <div id="who" class="who"></div>
+      <button id="questBtn" class="round quest" type="button" aria-label="Quests" data-quiet hidden>📋<i id="questDot" class="dot" hidden></i></button>
+      <button id="sndBtn" class="round" type="button" aria-label="Sound" hidden>🔊</button>
+      <button id="fsBtn" class="round" type="button" aria-label="Full screen">⛶</button>
+    </div>
   </div>
   <div id="emotes" class="emotes" hidden></div>
   <button id="emoteBtn" class="round bigRound" type="button" aria-label="Emotes">😊</button>
-  <button id="driveBtn" class="round bigRound drive" type="button" aria-label="Drive my car" hidden>🚗</button>
-  <button id="actBtn" class="btn primary action" type="button" hidden></button>
+  <button id="driveBtn" class="round bigRound drive" type="button" aria-label="Drive my car" data-quiet hidden>🚗</button>
+  <button id="actBtn" class="btn primary action" type="button" data-quiet hidden></button>
 </div>
 
 <!-- Word card shown when a star is collected -->
-<button id="card" class="wordCard" type="button" hidden>
+<button id="card" class="wordCard" type="button" data-quiet hidden>
   <span id="cardPic" class="pic"></span>
   <span class="words"><b id="cardEn"></b><span id="cardZh"></span><span id="cardMs"></span></span>
   <span class="spk" aria-hidden="true">🔊</span>
@@ -62,6 +67,25 @@
 
 <div id="toast" class="toast" role="status" hidden></div>
 <div id="lost" class="lost" hidden>Connection lost. Trying again…</div>
+
+<!-- Level-up and daily-chest celebration: only the card takes taps, the town stays playable around it -->
+<div id="celeb" class="celeb" hidden>
+  <canvas id="confetti" aria-hidden="true"></canvas>
+  <button id="celebCard" class="celebCard" type="button" data-quiet></button>
+</div>
+
+<!-- Quests: three a day, then the daily chest -->
+<div id="quests" class="screen quests" hidden>
+  <div class="qPanel" role="dialog" aria-label="Quests">
+    <div class="qHead">
+      <h2>Quests <span class="tri">任务 <span class="py">rènwu</span> · Misi</span></h2>
+      <div id="qLv" class="qLv"></div>
+      <button id="exitQuests" class="btn" type="button" data-quiet>Back</button>
+    </div>
+    <div id="qList" class="qList"></div>
+    <div id="qChest" class="qChest" hidden></div>
+  </div>
+</div>
 
 <!-- Art Studio -->
 <div id="studio" class="screen studio" hidden>
@@ -81,16 +105,17 @@
     <div id="sWho" class="who col"></div>
     <div id="sOptions" class="options"></div>
     <button id="guessBtn" class="btn primary" type="button">Guessing game</button>
-    <button id="exitStudio" class="btn" type="button">Back to town</button>
+    <button id="exitStudio" class="btn" type="button" data-quiet>Back to town</button>
   </div>
 </div>
 
 <!-- Gallery -->
 <div id="gallery" class="screen gallery" hidden>
-  <div class="galHead"><h2>Family Gallery</h2><button id="exitGallery" class="btn" type="button">Back to town</button></div>
+  <div class="galHead"><h2>Family Gallery</h2><button id="exitGallery" class="btn" type="button" data-quiet>Back to town</button></div>
   <div id="galGrid" class="galGrid"></div>
 </div>
 
+<script src="sound.js"></script>
 <script src="design-dress.js"></script>
 <script src="design-car.js"></script>
 <script src="game.js"></script>

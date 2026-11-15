@@ -7,6 +7,7 @@ const path = require('path');
 const os = require('os');
 const WebSocketServer = require('ws').WebSocketServer;
 const WORDS = require('./words');
+const SHOP = require('./shop');
 
 const PORT = parseInt(process.env.PORT || '3000', 10);
 const PUB = path.join(__dirname, 'public');
@@ -75,7 +76,7 @@ function broadcast(obj, filter) {
 }
 function inRoom(room) { return function (p) { return p.room === room; }; }
 function roomList(room) { return Array.from(players.values()).filter(inRoom(room)).sort(function (a, b) { return a.id - b.id; }); }
-function pub(p) { return { id: p.id, name: p.name, color: p.color, hat: p.hat, big: p.big, stars: p.stars, room: p.room, outfit: p.outfit, car: p.car, drive: p.drive }; }
+function pub(p) { return { id: p.id, name: p.name, color: p.color, hat: p.hat, big: p.big, stars: p.stars, lv: SHOP.levelOf(p.stars), room: p.room, outfit: p.outfit, car: p.car, drive: p.drive }; }
 // A design (outfit or car) is a small flat object of numbers and colours made by the designer screens.
 function cleanDesign(d) {
   if (!d || typeof d !== 'object' || Array.isArray(d)) return null;
@@ -91,8 +92,96 @@ function cleanDesign(d) {
 function sendPlayers() { broadcast({ t: 'players', list: Array.from(players.values()).map(pub), family: save.family }); }
 function toast(msg, filter) { broadcast({ t: 'toast', msg: msg }, filter); }
 
+// ---------- growth: levels, the shop, daily quests and the daily chest ----------
+// profile.stars  = stars earned in total (gives the level, never goes down)
+// profile.spent  = stars spent in the shop; what can be spent is stars - spent
+// profile.owned  = ids of shop items bought or found      profile.quests = today's three quests
+function dayStr(d) { return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
+function today() { return dayStr(new Date()); }
+function yesterday() { const d = new Date(); d.setDate(d.getDate() - 1); return dayStr(d); }
+function shuffle(a) {
+  a = a.slice();
+  for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)), t = a[i]; a[i] = a[j]; a[j] = t; }
+  return a;
+}
+const QUEST_DEF = {};
+SHOP.QUESTS.forEach(function (q) { QUEST_DEF[q.type] = q; });
+function newQuests() {
+  const solo = shuffle(SHOP.QUESTS.filter(function (q) { return q.solo; }));
+  const rest = shuffle(solo.slice(2).concat(SHOP.QUESTS.filter(function (q) { return !q.solo; })));
+  return shuffle([solo[0], solo[1], rest[0]]).map(function (q) {
+    const tier = q.tiers[Math.floor(Math.random() * q.tiers.length)];
+    return { type: q.type, n: tier[0], reward: tier[1], have: 0, claimed: false };
+  });
+}
+function questsOf(prof) {
+  const day = today();
+  if (!prof.quests || prof.quests.day !== day || !Array.isArray(prof.quests.list)) { prof.quests = { day: day, list: newQuests(), chest: false }; saveSoon(); }
+  return prof.quests;
+}
+function owns(prof, id) { return prof.owned.indexOf(id) >= 0; }
+// Sets up the growth fields on a profile. Saves from before the shop existed keep what they were wearing.
+function growProfile(prof) {
+  prof.stars = prof.stars || 0;
+  prof.spent = prof.spent || 0;
+  if (!Array.isArray(prof.owned)) {
+    prof.owned = [];
+    ['outfit', 'car'].forEach(function (kind) {
+      const d = cleanDesign(prof[kind]);
+      if (!d) return;
+      Object.keys(SHOP.FREE[kind]).forEach(function (k) {
+        const id = kind + '.' + k + '.' + d[k];
+        if (SHOP.ITEMS[id] && !owns(prof, id)) prof.owned.push(id);
+      });
+    });
+  }
+  questsOf(prof);
+}
+// A design may only use options the player owns; anything else is swapped for the free option.
+function enforce(kind, d, prof) {
+  if (!d || !prof) return d;
+  Object.keys(SHOP.FREE[kind]).forEach(function (k) {
+    const id = kind + '.' + k + '.' + d[k];
+    if (SHOP.ITEMS[id] && !owns(prof, id)) d[k] = SHOP.FREE[kind][k];
+  });
+  return d;
+}
+function meMsg(p) {
+  const prof = save.profiles[p.key], q = questsOf(prof), lv = SHOP.levelOf(p.stars);
+  const allClaimed = q.list.every(function (it) { return it.claimed; });
+  const streakAlive = prof.lastChest === q.day || prof.lastChest === yesterday();
+  return {
+    t: 'me', stars: p.stars, coins: p.stars - prof.spent, lv: lv,
+    lvAt: SHOP.LEVELS[lv - 1], lvNext: lv < SHOP.MAX_LEVEL ? SHOP.LEVELS[lv] : null,
+    owned: prof.owned,
+    quests: {
+      day: q.day, streak: streakAlive ? (prof.streak || 0) : 0, chest: q.chest ? 'opened' : allClaimed ? 'ready' : 'locked',
+      list: q.list.map(function (it) {
+        const def = QUEST_DEF[it.type] || {};
+        function fill(s) { return String(s || '').replace('{n}', it.n); }
+        return { type: it.type, icon: def.icon || '⭐', n: it.n, have: it.have, reward: it.reward, done: it.have >= it.n, claimed: it.claimed,
+          en: fill(def.en), zh: fill(def.zh), py: fill(def.py), ms: fill(def.ms) };
+      })
+    }
+  };
+}
+function sendMe(p) { if (save.profiles[p.key]) send(p, meMsg(p)); }
+// Something happened that a daily quest may be counting.
+function questEvent(p, type, n) {
+  const prof = save.profiles[p.key];
+  if (!prof) return;
+  let changed = false;
+  questsOf(prof).list.forEach(function (it, i) {
+    if (it.type !== type || it.have >= it.n) return;
+    it.have = Math.min(it.n, it.have + (n || 1));
+    changed = true;
+    if (it.have >= it.n) send(p, { t: 'questDone', i: i });
+  });
+  if (changed) { saveSoon(); sendMe(p); }
+}
+
 function addStars(p, n) {
-  const before = save.family;
+  const before = save.family, lvBefore = SHOP.levelOf(p.stars);
   p.stars += n;
   save.family += n;
   const prof = save.profiles[p.key];
@@ -100,8 +189,15 @@ function addStars(p, n) {
   WORLD.goals.forEach(function (g) {
     if (before < g && save.family >= g) toast('Family goal reached: ' + g + ' stars! Something new appeared in town.');
   });
+  const lv = SHOP.levelOf(p.stars);
+  if (lv > lvBefore) {
+    const items = Object.keys(SHOP.ITEMS).filter(function (id) { const it = SHOP.ITEMS[id]; return !it.chest && it.lv > lvBefore && it.lv <= lv; });
+    send(p, { t: 'levelup', lv: lv, items: items });
+    toast(p.name + ' reached level ' + lv + '!', function (o) { return o.id !== p.id; });
+  }
   saveSoon();
   sendPlayers();
+  sendMe(p);
 }
 
 // ---------- Art Studio: shared drawing + guessing game ----------
@@ -169,7 +265,7 @@ function stopTag(reward) {
   if (!tag.on) return;
   tag.on = false;
   if (reward) {
-    roomList('town').forEach(function (p) { if (p.id !== tag.it) addStars(p, 3); });
+    roomList('town').forEach(function (p) { if (p.id !== tag.it) { questEvent(p, 'tag'); addStars(p, 3); } });
     toast('Tag is over! Everyone who is not "it" gets 3 stars.');
   }
   broadcast(tagMsg());
@@ -209,12 +305,14 @@ function onJoin(ws, m) {
   prof.color = /^#[0-9a-fA-F]{6}$/.test(m.color) ? m.color : '#FF7A45';
   prof.hat = clamp(parseInt(m.hat, 10) || 0, 0, 3);
   prof.big = !!m.big;
+  growProfile(prof);
   saveSoon();
   const spot = { x: WORLD.spawn.x + rnd(-90, 90), y: WORLD.spawn.y + rnd(-50, 50) };
-  const p = { id: nextId++, ws: ws, key: key, name: name, color: prof.color, hat: prof.hat, big: prof.big, stars: prof.stars || 0, outfit: cleanDesign(prof.outfit), car: cleanDesign(prof.car), drive: false, x: spot.x, y: spot.y, f: 1, m: 0, room: 'town', alive: true };
+  const p = { id: nextId++, ws: ws, key: key, name: name, color: prof.color, hat: prof.hat, big: prof.big, stars: prof.stars, outfit: enforce('outfit', cleanDesign(prof.outfit), prof), car: enforce('car', cleanDesign(prof.car), prof), drive: false, x: spot.x, y: spot.y, f: 1, m: 0, room: 'town', alive: true };
   ws.player = p;
   players.set(p.id, p);
-  send(p, { t: 'welcome', id: p.id, version: VERSION, world: WORLD, x: p.x, y: p.y, stars: stars });
+  send(p, { t: 'welcome', id: p.id, version: VERSION, world: WORLD, x: p.x, y: p.y, stars: stars, shop: { items: SHOP.ITEMS, levels: SHOP.LEVELS } });
+  sendMe(p);
   send(p, tagMsg());
   sendPlayers();
   toast(name + ' joined the town!', function (o) { return o.id !== p.id; });
@@ -234,6 +332,9 @@ function onMessage(ws, m) {
           stars.splice(i, 1);
           broadcast({ t: 'stars', list: stars });
           send(p, { t: 'card', word: WORDS[Math.floor(Math.random() * WORDS.length)] });
+          p.cardFresh = true; // listening to this card counts once for the "words" quest
+          questEvent(p, 'stars');
+          if (p.drive) questEvent(p, 'drive');
           addStars(p, 1);
           setTimeout(function () { if (stars.length < STAR_COUNT) { addStar(); broadcast({ t: 'stars', list: stars }); } }, 4000);
           break;
@@ -251,8 +352,12 @@ function onMessage(ws, m) {
     case 'look': // saved from the Dress-Up Boutique or the Car Garage
       {
         const prof = save.profiles[p.key];
-        if (m.outfit !== undefined) { p.outfit = cleanDesign(m.outfit); if (prof) prof.outfit = p.outfit; }
-        if (m.car !== undefined) { p.car = cleanDesign(m.car); if (prof) prof.car = p.car; if (!p.car) p.drive = false; }
+        if (m.outfit !== undefined) {
+          const was = JSON.stringify(p.outfit);
+          p.outfit = enforce('outfit', cleanDesign(m.outfit), prof); if (prof) prof.outfit = p.outfit;
+          if (p.outfit && JSON.stringify(p.outfit) !== was) questEvent(p, 'dress');
+        }
+        if (m.car !== undefined) { p.car = enforce('car', cleanDesign(m.car), prof); if (prof) prof.car = p.car; if (!p.car) p.drive = false; }
         saveSoon();
         sendPlayers();
       }
@@ -263,6 +368,61 @@ function onMessage(ws, m) {
       break;
     case 'emote':
       broadcast({ t: 'emote', id: p.id, e: clamp(parseInt(m.e, 10) || 0, 0, 5) });
+      if (p.room === 'town' && roomList('town').some(function (o) { return o.id !== p.id && Math.abs(o.x - p.x) < 260 && Math.abs(o.y - p.y) < 260; })) questEvent(p, 'emote');
+      break;
+    case 'heard': // the player tapped the word card to hear it read aloud
+      if (p.cardFresh) { p.cardFresh = false; questEvent(p, 'words'); }
+      break;
+    case 'buy':
+      {
+        const id = String(m.id || ''), it = SHOP.ITEMS[id], prof = save.profiles[p.key];
+        let why = null;
+        if (!it || !prof) why = 'unknown';
+        else if (owns(prof, id)) why = 'owned';
+        else if (it.chest) why = 'chest';
+        else if (SHOP.levelOf(p.stars) < it.lv) why = 'level';
+        else if (p.stars - prof.spent < it.cost) why = 'stars';
+        if (why) { send(p, { t: 'bought', id: id, ok: false, why: why }); return; }
+        prof.spent += it.cost;
+        prof.owned.push(id);
+        saveSoon();
+        sendMe(p); // first the new numbers, then the answer, so the shop screen redraws with them
+        send(p, { t: 'bought', id: id, ok: true });
+      }
+      break;
+    case 'claim': // take the reward of a finished daily quest
+      {
+        const prof = save.profiles[p.key];
+        if (!prof) return;
+        const it = questsOf(prof).list[parseInt(m.i, 10)];
+        if (!it || it.claimed || it.have < it.n) return;
+        it.claimed = true;
+        addStars(p, it.reward);
+      }
+      break;
+    case 'chest': // the daily chest opens once all three quests are claimed
+      {
+        const prof = save.profiles[p.key];
+        if (!prof) return;
+        const q = questsOf(prof);
+        if (q.chest || !q.list.every(function (it) { return it.claimed; })) return;
+        q.chest = true;
+        prof.streak = prof.lastChest === yesterday() ? (prof.streak || 0) + 1 : 1;
+        prof.lastChest = q.day;
+        prof.chests = (prof.chests || 0) + 1;
+        prof.pity = (prof.pity || 0) + 1;
+        // a legendary item: always in the very first chest, at least every third chest, otherwise by luck
+        const pool = Object.keys(SHOP.ITEMS).filter(function (id) { return SHOP.ITEMS[id].chest && !owns(prof, id); });
+        let item = null;
+        if (pool.length && (prof.chests === 1 || prof.pity >= 3 || Math.random() < 0.35)) {
+          item = pool[Math.floor(Math.random() * pool.length)];
+          prof.owned.push(item);
+          prof.pity = 0;
+        }
+        const bonus = Math.min(30, 8 + 2 * prof.streak) + (item ? 0 : 5);
+        send(p, { t: 'chestOpen', stars: bonus, item: item, streak: prof.streak });
+        addStars(p, bonus);
+      }
       break;
     case 'draw':
       if (p.room !== 'studio' || !Array.isArray(m.pts) || m.pts.length < 2 || m.pts.length > 400) return;
@@ -294,9 +454,10 @@ function onMessage(ws, m) {
         if (!opt) return;
         if (opt.i === guess.word.i) {
           guess.guessed[p.id] = true;
+          questEvent(p, 'guess');
           addStars(p, (guess.wrong[p.id] || []).length ? 1 : 2);
           const d = players.get(guess.drawer);
-          if (d) addStars(d, 1);
+          if (d) { questEvent(d, 'draw'); addStars(d, 1); }
           studioChanged();
         } else {
           (guess.wrong[p.id] = guess.wrong[p.id] || []).push(parseInt(m.i, 10));
@@ -359,6 +520,8 @@ const server = http.createServer(function (req, res) {
         save.gallery.push({ file: file, name: cleanName(j.name) || 'Someone', ts: Date.now() });
         while (save.gallery.length > 40) save.gallery.shift(); // older files stay on disk, just leave the wall
         saveSoon();
+        const artistKey = cleanName(j.name).toLowerCase();
+        players.forEach(function (pl) { if (pl.key === artistKey) questEvent(pl, 'gallery'); });
         toast((cleanName(j.name) || 'Someone') + ' hung a new picture in the Gallery!');
         res.writeHead(200, { 'Content-Type': 'application/json' }); res.end('{"ok":true}');
       } catch (e) { res.writeHead(400); res.end('{"ok":false}'); }
@@ -396,6 +559,11 @@ setInterval(function () {
 setInterval(function () {
   wss.clients.forEach(function (ws) { if (!ws.alive) { ws.terminate(); return; } ws.alive = false; try { ws.ping(); } catch (e) {} });
 }, 15000);
+// a new day while someone is still playing: hand out the new daily quests
+setInterval(function () {
+  const day = today();
+  players.forEach(function (p) { const prof = save.profiles[p.key]; if (prof && (!prof.quests || prof.quests.day !== day)) sendMe(p); });
+}, 60000);
 
 server.listen(PORT, '0.0.0.0', function () {
   console.log('');

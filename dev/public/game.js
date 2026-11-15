@@ -25,6 +25,11 @@
   var tag = { on: false, it: 0, ends: 0 };
   var keys = {}, joy = null;
   var sent = { x: 0, y: 0, m: 0, f: 1, t: 0 };
+  // growth system: the shop catalogue (from "welcome") and this player's own numbers (from "me")
+  var shop = null, meState = null, buyWait = {}, gotList = false, famKnown = false;
+
+  // sounds live in sound.js; the game must work without it
+  function sfx(name) { try { if (window.Sfx && typeof window.Sfx.play === 'function') window.Sfx.play(name); } catch (e) {} }
 
   function send(o) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(o)); }
   function mine() { return players[me] || null; }
@@ -85,6 +90,24 @@
     var w = c.measureText(text).width + 18, h = (size || 18) + 10;
     rr(c, x - w / 2, y - h, w, h, h / 2); c.fillStyle = bg; c.fill(); c.lineWidth = 2.5; c.strokeStyle = NAVY; c.stroke();
     c.fillStyle = fg; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText(text, x, y - h / 2 + 1);
+    return h;
+  }
+  // Name tag above a player: a dark "Lv 3" part on the left when the level is known, then the name.
+  function nameTag(c, p, x, y, own) {
+    var size = 18, h = size + 10, lt = p.lv ? 'Lv ' + p.lv : '', lw = 0;
+    c.font = '600 ' + size + 'px ' + FONT;
+    var nw = c.measureText(p.name).width + 18;
+    if (lt) { c.font = '700 14px ' + FONT; lw = c.measureText(lt).width + 16; }
+    var w = nw + lw, left = x - w / 2;
+    rr(c, left, y - h, w, h, h / 2); c.fillStyle = own ? '#FFD66B' : '#fff'; c.fill();
+    if (lt) {
+      c.save(); rr(c, left, y - h, w, h, h / 2); c.clip();
+      c.fillStyle = NAVY; c.fillRect(left, y - h, lw, h); c.restore();
+      c.fillStyle = '#fff'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText(lt, left + lw / 2 + 2, y - h / 2 + 1);
+    }
+    rr(c, left, y - h, w, h, h / 2); c.lineWidth = 2.5; c.strokeStyle = NAVY; c.stroke();
+    c.font = '600 ' + size + 'px ' + FONT; c.fillStyle = NAVY; c.textAlign = 'center'; c.textBaseline = 'middle';
+    c.fillText(p.name, left + lw + nw / 2 - (lt ? 2 : 0), y - h / 2 + 1);
     return h;
   }
 
@@ -172,6 +195,7 @@
       case 'welcome':
         if (version && version !== m.version) { newRelease(); return; } // a new release went live
         version = m.version; me = m.id; world = m.world; stars = m.stars;
+        shop = m.shop || null; meState = null; // an older server sends neither "shop" nor "me": the game then plays as before
         if (!joined) { my.x = m.x; my.y = m.y; toast('Drag on the left side to walk. On a laptop, use the arrow keys.'); }
         joined = true;
         $('join').hidden = true; $('lost').hidden = true; $('hud').hidden = (room === 'studio');
@@ -179,16 +203,23 @@
         sent.t = 0; sent.x = -1;
         break;
       case 'players':
-        var seen = {};
+        var seen = {}, fresh = false, goalHit = false, wasDrive = !!(mine() && mine().drive);
         for (i = 0; i < m.list.length; i++) {
           var d = m.list[i]; p = players[d.id];
-          if (!p) p = players[d.id] = { x: world ? world.spawn.x : 0, y: world ? world.spawn.y : 0, tx: 0, ty: 0, f: 1, m: 0, placed: false };
+          if (!p) {
+            p = players[d.id] = { x: world ? world.spawn.x : 0, y: world ? world.spawn.y : 0, tx: 0, ty: 0, f: 1, m: 0, placed: false };
+            if (gotList && d.id !== me) fresh = true;
+          }
           p.id = d.id; p.name = d.name; p.color = d.color; p.hat = d.hat; p.big = d.big; p.stars = d.stars; p.room = d.room;
-          p.outfit = d.outfit; p.car = d.car; p.drive = d.drive;
+          p.outfit = d.outfit; p.car = d.car; p.drive = d.drive; p.lv = d.lv || 0;
           seen[d.id] = 1;
         }
         Object.keys(players).forEach(function (id) { if (!seen[id]) delete players[id]; });
-        family = m.family; updateHud(); renderStudioSide();
+        if (famKnown && world) world.goals.forEach(function (gl) { if (family < gl && m.family >= gl) goalHit = true; });
+        family = m.family; famKnown = true; gotList = true;
+        updateHud(); renderStudioSide();
+        if (goalHit) sfx('goal'); else if (fresh) sfx('join');
+        if (!wasDrive && mine() && mine().drive) sfx('car');
         break;
       case 'state':
         for (i = 0; i < m.p.length; i++) {
@@ -199,10 +230,23 @@
         }
         break;
       case 'stars': stars = m.list; break;
-      case 'card': showCard(m.word); break;
+      case 'card': showCard(m.word); sfx('star'); setTimeout(function () { sfx('card'); }, 240); break;
       case 'toast': toast(m.msg); break;
-      case 'emote': p = players[m.id]; if (p) { p.emote = EMOTES[m.e] || EMOTES[0]; p.emoteUntil = Date.now() + 2600; } break;
-      case 'tag': tag.on = m.on; tag.it = m.it; tag.ends = Date.now() + m.left; updateTag(); break;
+      case 'emote': p = players[m.id]; if (p) { p.emote = EMOTES[m.e] || EMOTES[0]; p.emoteUntil = Date.now() + 2600; if (room === 'town') sfx('emote'); } break;
+      case 'tag':
+        var wasOn = tag.on, wasIt = tag.it, wasEnds = tag.ends;
+        tag.on = !!m.on; tag.it = m.it; tag.ends = Date.now() + m.left; updateTag();
+        if (tag.on && tag.it === me && (!wasOn || wasIt !== me)) sfx('tagit');
+        else if (wasOn && !tag.on && wasIt !== me && Date.now() > wasEnds - 2500) sfx('tagwin'); // time ran out and I was not "it"
+        break;
+      case 'me':
+        if (!Array.isArray(m.owned)) m.owned = [];
+        meState = m; updateHud(); renderQuests();
+        break;
+      case 'questDone': onQuestDone(m); break;
+      case 'levelup': celebrate({ kind: 'level', lv: m.lv, items: Array.isArray(m.items) ? m.items : [] }); break;
+      case 'bought': onBought(m); break;
+      case 'chestOpen': celebrate({ kind: 'chest', stars: m.stars || 0, item: m.item || null, streak: m.streak || 0 }); break;
       case 'strokes': sClear(); for (i = 0; i < m.list.length; i++) sSeg(m.list[i].c, m.list[i].w, m.list[i].pts); break;
       case 'draw': sSeg(m.c, m.w, m.pts); break;
       case 'clear': sClear(); break;
@@ -212,18 +256,37 @@
 
   // ---------- HUD ----------
   function chips(list, withRoom) {
+    // Your own chip is yellow, like your name tag. In town the chip shows the level; without levels (older server) the stars.
     return list.map(function (p) {
-      return '<span class="tagc"><i style="background:' + esc(p.color) + '"></i>' + esc(p.name) + (p.id === me ? ' (you)' : '') +
-        ' <em>⭐' + p.stars + (withRoom && p.room === 'studio' ? ' 🎨' : '') + '</em></span>';
+      return '<span class="tagc' + (p.id === me ? ' me' : '') + '"><i style="background:' + esc(p.color) + '"></i>' + esc(p.name) +
+        (p.lv ? ' <b class="lvc">Lv ' + p.lv + '</b>' : '') +
+        (withRoom && p.lv ? '' : ' <em>⭐' + p.stars + '</em>') + (withRoom && p.room === 'studio' ? ' <em>🎨</em>' : '') + '</span>';
     }).join('');
   }
   function plist() { return Object.keys(players).map(function (id) { return players[id]; }).sort(function (a, b) { return a.id - b.id; }); }
+  // how far through the current level, 0-100
+  function lvPct(st) {
+    if (st.lvNext === null || st.lvNext === undefined) return 100;
+    var span = st.lvNext - st.lvAt;
+    return span > 0 ? clamp(Math.round((st.stars - st.lvAt) * 100 / span), 0, 100) : 100;
+  }
   function updateHud() {
-    var p = mine(); if (!p || !world) return;
-    $('myStars').textContent = p.stars;
+    var p = mine(), st = meState, qb = $('questBtn'), n = 0;
+    $('myStars').textContent = st ? st.coins : (p ? p.stars : 0); // stars that can be spent
+    $('lvPill').hidden = !st;
+    if (st) { $('lvNum').textContent = 'Lv ' + st.lv; $('lvFill').style.width = lvPct(st) + '%'; }
+    if (st && st.quests && st.quests.list) {
+      st.quests.list.forEach(function (x) { if (x.done && !x.claimed) n++; });
+      if (st.quests.chest === 'ready') n++;
+      qb.hidden = false;
+    } else qb.hidden = true;
+    $('questDot').hidden = !n; $('questDot').textContent = n;
+    qb.classList.toggle('has', n > 0);
+    qb.setAttribute('aria-label', n ? 'Quests: ' + n + ' reward' + (n === 1 ? '' : 's') + ' waiting' : 'Quests');
+    if (!p || !world) return;
     $('famStars').textContent = family;
     var next = world.goals.filter(function (g) { return g > family; })[0];
-    $('famGoal').textContent = next ? '/ ' + next + ' family goal' : 'all goals reached!';
+    $('famGoal').innerHTML = next ? '/ ' + next + '<span class="wo"> family goal</span>' : '<span class="wo">all goals reached!</span>';
     $('who').innerHTML = chips(plist(), true);
   }
   function updateTag() {
@@ -242,14 +305,18 @@
   }
 
   // word card + reading aloud
-  var cardWord = null, cardTimer = null;
+  var cardWord = null, cardTimer = null, cardHeard = false;
   function showCard(w) {
-    cardWord = w;
+    cardWord = w; cardHeard = false;
     $('cardPic').textContent = w.pic; $('cardEn').textContent = w.en; $('cardZh').innerHTML = esc(w.zh) + ' ' + pyHtml(w); $('cardMs').textContent = w.ms;
     $('card').hidden = false;
     clearTimeout(cardTimer); cardTimer = setTimeout(function () { $('card').hidden = true; }, 7000);
   }
-  $('card').onclick = function () { if (cardWord) speak(cardWord); };
+  $('card').onclick = function () {
+    if (!cardWord) return;
+    speak(cardWord);
+    if (!cardHeard) { cardHeard = true; send({ t: 'heard' }); } // counts for the "listen to words" quest, once per card
+  };
   function speak(w) {
     var syn = window.speechSynthesis; if (!syn || !window.SpeechSynthesisUtterance) return;
     try {
@@ -264,6 +331,7 @@
   // emotes, full screen, drive
   EMOTES.forEach(function (e, i) {
     var b = document.createElement('button'); b.type = 'button'; b.textContent = e; b.setAttribute('aria-label', 'Emote ' + (i + 1));
+    b.setAttribute('data-quiet', ''); // the emote sound plays when the server echoes it
     b.onclick = function () { send({ t: 'emote', e: i }); $('emotes').hidden = true; };
     $('emotes').appendChild(b);
   });
@@ -276,6 +344,32 @@
     } catch (e) {}
   };
   $('driveBtn').onclick = function () { var p = mine(); if (p) send({ t: 'drive', on: !p.drive }); };
+
+  // sound button: music + effects -> effects only -> off
+  var SND_ICON = ['🔇', '🔊', '🎵'], SND_NAME = ['Sound is off', 'Sound effects only', 'Music and sound effects'];
+  function sndMode() { try { return window.Sfx && typeof window.Sfx.mode === 'function' ? window.Sfx.mode() : -1; } catch (e) { return -1; } }
+  function updateSnd() {
+    var b = $('sndBtn'), m = sndMode();
+    if (m < 0 || typeof window.Sfx.setMode !== 'function') { b.hidden = true; return; }
+    b.hidden = false; b.textContent = SND_ICON[m] || SND_ICON[1]; b.setAttribute('aria-label', SND_NAME[m] || 'Sound');
+  }
+  $('sndBtn').onclick = function () {
+    var m = sndMode(); if (m < 0) return;
+    try { window.Sfx.setMode(m === 2 ? 1 : m === 1 ? 0 : 2); } catch (e) {}
+    updateSnd(); toast(SND_NAME[sndMode()] || 'Sound');
+  };
+  updateSnd();
+
+  // A soft tap for every button that has no sound of its own (data-quiet). The designers make their own sounds.
+  document.addEventListener('click', function (e) {
+    var el = e.target, btn = null;
+    while (el && el.nodeType === 1) {
+      if (!btn && el.tagName === 'BUTTON') btn = el;
+      if (el.classList && (el.classList.contains('dd-ov') || el.classList.contains('cd-ov'))) return;
+      el = el.parentNode;
+    }
+    if (btn && !btn.disabled && btn.getAttribute('data-quiet') === null) sfx('tap');
+  }, true);
 
   // context action button
   var action = null;
@@ -308,17 +402,58 @@
   $('actBtn').onclick = function () {
     if (!action || !action.id) return;
     var p = mine();
-    if (action.id === 'studio') enterStudio();
-    else if (action.id === 'gallery') openGallery();
-    else if (action.id === 'tag') send({ t: 'tagStart' });
+    if (action.id === 'studio') { sfx('open'); enterStudio(); }
+    else if (action.id === 'gallery') { sfx('open'); openGallery(); }
+    else if (action.id === 'tag') { sfx('tap'); send({ t: 'tagStart' }); }
     else if (action.id === 'dress') {
       if (!Dress) return toast('Dress-Up is not ready yet.');
-      Dress.open(p && p.outfit, function (d) { send({ t: 'look', outfit: d }); send({ t: 'drive', on: false }); toast('Lovely! Everyone in town can see your new look.'); });
+      sfx('open');
+      Dress.open(p && p.outfit, function (d) { send({ t: 'look', outfit: d }); send({ t: 'drive', on: false }); toast('Lovely! Everyone in town can see your new look.'); }, { shop: shopFor('outfit') });
     } else if (action.id === 'cars') {
       if (!Car) return toast('The Car Garage is not ready yet.');
-      Car.open(p && p.car, function (d) { send({ t: 'look', car: d }); send({ t: 'drive', on: true }); toast('Vroom! Tap the car button to get in or out.'); }, { driver: p ? p.color : undefined });
+      sfx('open');
+      Car.open(p && p.car, function (d) { send({ t: 'look', car: d }); send({ t: 'drive', on: true }); toast('Vroom! Tap the car button to get in or out.'); }, { driver: p ? p.color : undefined, shop: shopFor('car') });
     }
   };
+
+  // ---------- shop: what the Dress-Up and Car Garage screens need to lock, price and sell things ----------
+  // Undefined when the server has no shop: the designers then leave everything free, as before.
+  function shopFor(kind) {
+    if (!shop || !shop.items || !meState) return undefined;
+    return {
+      kind: kind,
+      items: shop.items,
+      state: function () { // always the latest numbers
+        var own = {}, list = (meState && meState.owned) || [], i;
+        for (i = 0; i < list.length; i++) own[list[i]] = true;
+        return { coins: meState ? meState.coins : 0, lv: meState ? meState.lv : 1, owned: own };
+      },
+      buy: buyItem
+    };
+  }
+  function buyItem(id, cb) {
+    var old = buyWait[id];
+    if (old) { clearTimeout(old.timer); if (typeof old.cb === 'function') old.cb(false, 'unknown'); }
+    var entry = { cb: cb, timer: 0 };
+    entry.timer = setTimeout(function () { // no answer: the connection dropped, or the server is an older one
+      if (buyWait[id] !== entry) return;
+      delete buyWait[id];
+      if (typeof cb === 'function') cb(false, 'unknown');
+    }, 5000);
+    buyWait[id] = entry;
+    send({ t: 'buy', id: id });
+  }
+  function onBought(m) {
+    var it = shop && shop.items ? shop.items[m.id] : null, w = buyWait[m.id];
+    if (m.ok && meState && meState.owned.indexOf(m.id) < 0) { // the "me" update may arrive after this message
+      meState.owned.push(m.id);
+      if (it && it.cost) meState.coins = Math.max(0, meState.coins - it.cost);
+      updateHud();
+    }
+    if (!w) return;
+    delete buyWait[m.id]; clearTimeout(w.timer);
+    if (typeof w.cb === 'function') w.cb(!!m.ok, m.ok ? undefined : (m.why || 'unknown'));
+  }
 
   // ---------- input ----------
   var town = $('town'), ctx = town.getContext('2d'), dpr = 1, W = 0, H = 0;
@@ -370,7 +505,7 @@
       var l = Math.sqrt(vx * vx + vy * vy);
       if (l > 1) { vx /= l; vy /= l; }
       if (l > 0.12) {
-        var sp = (p && p.drive ? 430 : 265) * dt;
+        var sp = (p && p.drive ? (p.car && p.car.extra === 3 ? 500 : 430) : 265) * dt; // the rocket booster makes a car faster
         var nx = clamp(my.x + vx * sp, 40, world.w - 40), ny = clamp(my.y + vy * sp, 90, world.h - 30);
         if (!blocked(nx, my.y)) my.x = nx;
         if (!blocked(my.x, ny)) my.y = ny;
@@ -498,7 +633,7 @@
       if (p.room !== 'town' || (p.id !== me && !p.placed)) return;
       items.push({ y: p.y, d: function () {
         var h = drawPlayer(c, p, p.x, p.y, t + p.id * 0.7), top = p.y - h - 8;
-        top -= label(c, p.name, p.x, top, p.id === me ? '#FFD66B' : '#fff', NAVY, 18) + 4;
+        top -= nameTag(c, p, p.x, top, p.id === me) + 4;
         if (tag.on && tag.it === p.id) top -= label(c, 'IT', p.x, top, '#FF4F6D', '#fff', 20) + 4;
         if (p.emote && p.emoteUntil > Date.now()) {
           c.font = '44px ' + FONT; c.textAlign = 'center'; c.textBaseline = 'alphabetic'; c.fillText(p.emote, p.x, top - 4);
@@ -595,7 +730,7 @@
     x.send(JSON.stringify({ name: look.name, img: paper.toDataURL('image/png') }));
   };
   $('guessBtn').onclick = function () { send({ t: g.phase === 'idle' ? 'guessStart' : 'guessStop' }); };
-  $('exitStudio').onclick = function () { room = 'town'; send({ t: 'room', room: 'town' }); $('studio').hidden = true; $('hud').hidden = false; };
+  $('exitStudio').onclick = function () { sfx('close'); room = 'town'; send({ t: 'room', room: 'town' }); $('studio').hidden = true; $('hud').hidden = false; };
   function enterStudio() {
     room = 'studio'; joy = null; send({ t: 'room', room: 'studio' });
     $('studio').hidden = false; $('hud').hidden = true; $('card').hidden = true;
@@ -605,9 +740,13 @@
   function pyHtml(w) { return '<span class="py">' + esc(w.py) + '</span>'; }
   function word3(w) { return '<b>' + esc(w.en) + '</b> · ' + esc(w.zh) + ' ' + pyHtml(w) + ' · ' + esc(w.ms); }
   function onGuess(m) {
-    var was = g.phase;
+    var was = g.phase, hadMe = g.guessed.indexOf(me) >= 0, hadGot = g.guessed.length, hadWrong = g.wrong.length;
     g.phase = m.phase; g.drawer = m.drawer; g.ends = Date.now() + m.left; g.guessed = m.guessed || [];
     g.word = m.word || null; g.options = m.options || []; g.wrong = m.wrong || [];
+    if (g.phase === 'draw' && was === 'draw') {
+      if (g.drawer === me ? g.guessed.length > hadGot : (!hadMe && g.guessed.indexOf(me) >= 0)) sfx('right'); // I got it, or someone got my drawing
+      else if (g.wrong.length > hadWrong) sfx('wrong');
+    }
     if (g.phase === 'reveal' && was !== 'reveal' && g.word) speak(g.word);
     if (!canDraw() && stroke !== null) { stroke = null; pending = false; }
     renderGuess();
@@ -665,7 +804,153 @@
     x.onerror = function () { grid.innerHTML = '<p class="empty">Could not load the gallery.</p>'; };
     x.send();
   }
-  $('exitGallery').onclick = function () { room = 'town'; $('gallery').hidden = true; $('hud').hidden = false; };
+  $('exitGallery').onclick = function () { sfx('close'); room = 'town'; $('gallery').hidden = true; $('hud').hidden = false; };
+
+  // ---------- Quests: three a day, then the daily chest ----------
+  // name of a quest or a shop item in the three languages, stacked (tri) or on one line (triLine)
+  function tri(o) { return '<b>' + esc(o.en) + '</b><span>' + esc(o.zh) + ' <span class="py">' + esc(o.py) + '</span></span><span>' + esc(o.ms) + '</span>'; }
+  function triLine(o) { return '<b>' + esc(o.en) + '</b> · ' + esc(o.zh) + ' <span class="py">' + esc(o.py) + '</span> · ' + esc(o.ms); }
+  function bar(pct) { return '<span class="lvBar wide"><i style="width:' + pct + '%"></i></span>'; }
+  function renderQuests() {
+    if ($('quests').hidden) return;
+    var st = meState, q = st && st.quests, list = $('qList'), ch = $('qChest'), lv = $('qLv');
+    if (!st || !q || !q.list) { lv.innerHTML = ''; ch.hidden = true; list.innerHTML = '<p class="hint">Quests are not ready yet.</p>'; return; }
+    lv.innerHTML = '<b>Level ' + st.lv + '</b>' + bar(lvPct(st)) +
+      '<span>' + (st.lvNext === null || st.lvNext === undefined ? 'Top level!' : Math.max(0, st.lvNext - st.stars) + ' ⭐ to level ' + (st.lv + 1)) + '</span>';
+    list.innerHTML = q.list.map(function (x, i) {
+      var have = Math.min(x.have, x.n), pct = x.n > 0 ? Math.round(have * 100 / x.n) : 100, act;
+      if (x.claimed) act = '<span class="qDone">✔ ⭐ ' + x.reward + '</span>';
+      else if (x.done) act = '<button class="btn primary" type="button" data-quiet data-claim="' + i + '">Claim ⭐ ' + x.reward + '</button>';
+      else act = '<span class="qRew">⭐ ' + x.reward + '</span>';
+      return '<div class="qRow' + (x.claimed ? ' ok' : x.done ? ' ready' : '') + '"><span class="qIco">' + esc(x.icon || '⭐') + '</span>' +
+        '<span class="qTxt">' + tri(x) + '</span>' +
+        '<span class="qProg">' + bar(pct) + '<em>' + have + ' / ' + x.n + '</em></span><span class="qAct">' + act + '</span></div>';
+    }).join('');
+    var left = q.list.filter(function (x) { return !x.claimed; }).length, note, act;
+    if (q.chest === 'ready') { note = 'All quests done. Open your chest!'; act = '<button class="btn primary" type="button" data-quiet data-chest="1">Open!</button>'; }
+    else if (q.chest === 'opened') { note = 'Opened today. Come back tomorrow for a new one!'; act = '<span class="qDone">✔</span>'; }
+    else { note = 'Finish and claim ' + left + ' more quest' + (left === 1 ? '' : 's') + ' to open it.'; act = '<span class="qRew">🔒</span>'; }
+    ch.hidden = false;
+    ch.className = 'qChest' + (q.chest === 'ready' ? ' ready' : '');
+    ch.innerHTML = '<span class="qIco">🎁</span><span class="qTxt"><b>Daily chest</b><span>每日宝箱 <span class="py">měirì bǎoxiāng</span> · Peti harian</span><span class="qNote">' + note + '</span></span>' +
+      (q.streak > 0 ? '<span class="qStreak">🔥 ' + q.streak + (q.streak === 1 ? ' day' : ' days') + '</span>' : '') + '<span class="qAct">' + act + '</span>';
+  }
+  function closeQuests() { if ($('quests').hidden) return; sfx('close'); $('quests').hidden = true; }
+  $('questBtn').onclick = function () { sfx('open'); joy = null; $('emotes').hidden = true; $('quests').hidden = false; renderQuests(); };
+  $('exitQuests').onclick = closeQuests;
+  $('quests').addEventListener('click', function (e) {
+    if (e.target === $('quests')) { closeQuests(); return; } // a tap beside the panel closes it
+    var el = e.target, i, x, q = meState && meState.quests;
+    while (el && el !== this) {
+      if (el.tagName === 'BUTTON' && !el.disabled && q) {
+        if (el.getAttribute('data-claim') !== null) {
+          i = parseInt(el.getAttribute('data-claim'), 10); x = q.list ? q.list[i] : null;
+          if (x && x.done && !x.claimed) { el.disabled = true; sfx('claim'); send({ t: 'claim', i: i }); }
+          return;
+        }
+        if (el.getAttribute('data-chest') !== null) {
+          if (q.chest === 'ready') { el.disabled = true; send({ t: 'chest' }); } // the chest sound plays when it opens
+          return;
+        }
+      }
+      el = el.parentNode;
+    }
+  });
+  function onQuestDone(m) {
+    var q = meState && meState.quests && meState.quests.list ? meState.quests.list[m.i] : null;
+    sfx('quest');
+    toast((q ? 'Quest done: ' + q.en + '! ' : 'Quest done! ') + 'Tap 📋 for your reward.');
+  }
+
+  // ---------- celebrations: level up, daily chest ----------
+  // One small card in the middle of the screen. Only the card takes taps, so the town stays playable around it.
+  // Waiting ones are merged or dropped, so they never pile up.
+  var celebQ = [], celebNow = null, celebTimer = null;
+  var CONF = ['#FF4F6D', '#FFC933', '#5AA9FF', '#7BD389', '#9B6BFF', '#FF8FB8', '#FF7A45'];
+  var confP = [], confRaf = 0, confLast = 0, confAge = 0;
+  function celebrate(o) {
+    var i;
+    if (o.kind === 'level') {
+      for (i = 0; i < celebQ.length; i++) {
+        if (celebQ[i].kind === 'level') { celebQ[i].lv = Math.max(celebQ[i].lv, o.lv); celebQ[i].items = celebQ[i].items.concat(o.items); return; }
+      }
+    }
+    if (celebQ.length >= 3) return;
+    celebQ.push(o);
+    if (!celebNow) nextCeleb();
+  }
+  function itemOf(id) { return shop && shop.items && shop.items[id] ? shop.items[id] : null; }
+  // the item on the default character or car, so the child sees what it is
+  function drawItemPic(cv, id) {
+    var q = String(id).split('.'), val = parseInt(q[2], 10), c, d;
+    try {
+      c = cv.getContext('2d'); c.setTransform(2, 0, 0, 2, 0, 0); c.clearRect(0, 0, 160, 130);
+      if (q[0] === 'outfit' && Dress) { d = Dress.defaults(); d[q[1]] = val; Dress.draw(c, 80, 124, d, { scale: 1.05, t: 0 }); }
+      else if (q[0] === 'car' && Car) { d = Car.defaults(); d[q[1]] = val; Car.draw(c, 80, 112, d, { scale: 1, t: 0 }); }
+    } catch (e) {}
+  }
+  function nextCeleb() {
+    clearTimeout(celebTimer);
+    celebNow = celebQ.shift() || null;
+    var box = $('celeb'), card = $('celebCard'), o = celebNow, html, it, items;
+    if (!o) { box.hidden = true; return; }
+    if (o.kind === 'level') {
+      items = o.items.filter(function (id, n) { return itemOf(id) && o.items.indexOf(id) === n; });
+      html = '<span class="cBig">Level ' + o.lv + '!</span>' +
+        '<span class="cSub">第 ' + o.lv + ' 级 <span class="py">dì ' + o.lv + ' jí</span> · Tahap ' + o.lv + '</span>';
+      if (items.length) {
+        html += '<span class="cNew">New in the shops:</span>';
+        items.slice(0, 6).forEach(function (id) {
+          it = itemOf(id);
+          html += '<span class="cIt">' + (id.indexOf('car.') === 0 ? '🚗 ' : '👗 ') + triLine(it) + (it.cost ? ' <em>⭐ ' + it.cost + '</em>' : '') + '</span>';
+        });
+        if (items.length > 6) html += '<span class="cIt">and ' + (items.length - 6) + ' more</span>';
+      }
+    } else {
+      it = o.item ? itemOf(o.item) : null;
+      html = '<span class="cBig">🎁 +' + o.stars + ' ⭐</span>' +
+        '<span class="cSub">Daily chest · 每日宝箱 <span class="py">měirì bǎoxiāng</span> · Peti harian</span>';
+      if (o.item) {
+        html += '<canvas id="celebPic" class="cPic" width="320" height="260" aria-hidden="true"></canvas>' +
+          '<span class="cNew">' + (it && it.rare === 3 ? 'Legendary find!' : 'You found:') + '</span>' +
+          '<span class="cIt">' + (it ? triLine(it) : 'A special item') + '</span>' +
+          '<span class="cHint">' + (String(o.item).indexOf('car.') === 0 ? 'It is waiting in the Car Garage.' : 'It is waiting in Dress-Up.') + '</span>';
+      }
+      if (o.streak > 1) html += '<span class="cHint">🔥 ' + o.streak + ' days in a row!</span>';
+    }
+    card.innerHTML = html + '<span class="cHint">Tap to close</span>';
+    box.hidden = false;
+    if (o.kind === 'chest' && o.item && $('celebPic')) drawItemPic($('celebPic'), o.item);
+    sfx(o.kind === 'level' ? 'levelup' : 'chest');
+    confetti();
+    celebTimer = setTimeout(nextCeleb, o.kind === 'level' ? 7000 : 9000); // goes away by itself too
+  }
+  $('celebCard').onclick = function () { nextCeleb(); };
+  function confetti() {
+    var cv = $('confetti'), w, h, i;
+    if (!cv.getContext) return;
+    w = cv.width = window.innerWidth; h = cv.height = window.innerHeight;
+    confP = [];
+    for (i = 0; i < 80; i++) {
+      confP.push({ x: Math.random() * w, y: -20 - Math.random() * h * 0.7, vx: (Math.random() - 0.5) * 120, vy: 150 + Math.random() * 230,
+        r: 5 + Math.random() * 6, a: Math.random() * 6.3, va: (Math.random() - 0.5) * 9, c: CONF[i % CONF.length] });
+    }
+    confAge = 0; confLast = 0;
+    if (!confRaf) confRaf = requestAnimationFrame(confFrame);
+  }
+  function confFrame(ts) {
+    var cv = $('confetti'), c = cv.getContext('2d'), dt = confLast ? Math.min(0.05, (ts - confLast) / 1000) : 0.016, alive = false, i, p;
+    confLast = ts; confAge += dt;
+    c.setTransform(1, 0, 0, 1, 0, 0); c.clearRect(0, 0, cv.width, cv.height);
+    for (i = 0; i < confP.length; i++) {
+      p = confP[i]; p.x += p.vx * dt; p.y += p.vy * dt; p.a += p.va * dt;
+      if (p.y > cv.height + 20) continue;
+      alive = true;
+      c.save(); c.translate(p.x, p.y); c.rotate(p.a); c.fillStyle = p.c; c.fillRect(-p.r, -p.r * 0.5, p.r * 2, p.r); c.restore();
+    }
+    if (alive && confAge < 6 && celebNow) confRaf = requestAnimationFrame(confFrame);
+    else { confRaf = 0; confP = []; c.clearRect(0, 0, cv.width, cv.height); }
+  }
 
   resize(); sClear();
   requestAnimationFrame(frame);
