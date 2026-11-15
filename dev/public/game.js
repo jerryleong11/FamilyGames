@@ -14,8 +14,7 @@
   var EMOTES = ['❤️', '😂', '👋', '👍', '🎉', '😮'];
   var PALETTE = ['#1B2A49', '#FF4F6D', '#FF7A45', '#FFC933', '#4FA05A', '#3B82F6', '#9B6BFF', '#FF8FB8', '#7A4A2B', '#8A8F98'];
   var SIZES = [5, 12, 26];
-  var TREES = [[120, 170], [830, 130], [60, 760], [1500, 150], [1790, 720], [2290, 130], [2310, 640], [130, 580], [150, 1000], [800, 1010], [820, 1440], [150, 1500], [1540, 1000], [1600, 1480], [2290, 1010], [2300, 1500], [560, 1010], [2200, 760], [2240, 420]];
-  var Dress = window.DressDesigner || null, Car = window.CarDesigner || null;
+  var Dress = window.DressDesigner || null, Car = window.CarDesigner || null, Scene = window.Scene;
 
   // ---------- state ----------
   var ws = null, me = 0, world = null, version = null, joined = false, room = 'town';
@@ -55,7 +54,13 @@
     c.lineJoin = 'round';
     c.fillStyle = NAVY; // feet
     c.beginPath(); c.ellipse(x - w * 0.22, y - 3 * s, 9 * s, 5 * s, 0, 0, 7); c.ellipse(x + w * 0.22, y - 3 * s, 9 * s, 5 * s, 0, 0, 7); c.fill();
-    rr(c, left, top, w, h, 18 * s); c.fillStyle = p.color; c.fill(); c.lineWidth = 3.5 * s; c.strokeStyle = NAVY; c.stroke();
+    c.lineWidth = 3.5 * s; c.strokeStyle = NAVY;
+    rr(c, left + 7 * s, top - 5 * s, w, h, 18 * s); c.fillStyle = Scene.shade(p.color, -0.28); c.fill(); c.stroke();   // the side, for a chunky 2.5D block
+    rr(c, left, top, w, h, 18 * s); c.fillStyle = p.color; c.fill(); c.stroke();
+    c.save(); rr(c, left, top, w, h, 18 * s); c.clip();
+    c.fillStyle = 'rgba(255,255,255,0.22)'; c.beginPath(); c.ellipse(left + w * 0.3, top + h * 0.12, w * 0.42, h * 0.2, -0.3, 0, 7); c.fill();
+    c.fillStyle = 'rgba(27,42,73,0.12)'; c.fillRect(left, top + h * 0.78, w, h * 0.22);
+    c.restore();
     var ey = top + 24 * s, ex = 13 * s;
     c.fillStyle = '#fff'; c.beginPath(); c.arc(x - ex, ey, 8.5 * s, 0, 7); c.arc(x + ex, ey, 8.5 * s, 0, 7); c.fill();
     c.fillStyle = NAVY; c.beginPath(); c.arc(x - ex + f * 3 * s, ey + 1.5 * s, 4 * s, 0, 7); c.arc(x + ex + f * 3 * s, ey + 1.5 * s, 4 * s, 0, 7); c.fill();
@@ -525,58 +530,7 @@
     });
   }
 
-  // ---------- render the town ----------
-  function drawBuilding(c, b) {
-    var wallTop = b.y + 84;
-    c.lineJoin = 'round'; c.lineWidth = 4; c.strokeStyle = NAVY;
-    rr(c, b.x, wallTop, b.w, b.h - 84, 14); c.fillStyle = b.open ? b.wall : '#D9D4C7'; c.fill(); c.stroke();
-    c.beginPath(); c.moveTo(b.x - 22, wallTop + 6); c.lineTo(b.x + 34, b.y); c.lineTo(b.x + b.w - 34, b.y); c.lineTo(b.x + b.w + 22, wallTop + 6); c.closePath();
-    c.fillStyle = b.open ? b.roof : '#9A968C'; c.fill(); c.stroke();
-    // windows
-    c.fillStyle = b.open ? '#FFF6C9' : '#B9B5AA';
-    rr(c, b.x + 36, wallTop + 58, 70, 60, 10); c.fill(); c.stroke();
-    rr(c, b.x + b.w - 106, wallTop + 58, 70, 60, 10); c.fill(); c.stroke();
-    // door
-    var dx = b.x + b.w / 2;
-    rr(c, dx - 36, b.y + b.h - 96, 72, 96, 14); c.fillStyle = b.open ? NAVY : '#7E7A70'; c.fill(); c.stroke();
-    c.fillStyle = '#FFD66B'; c.beginPath(); c.arc(dx + 20, b.y + b.h - 46, 5, 0, 7); c.fill();
-    // sign
-    c.font = '700 30px ' + FONT;
-    var tw = Math.max(150, c.measureText(b.name).width + 40);
-    rr(c, dx - tw / 2, wallTop + 4, tw, 46, 14); c.fillStyle = '#fff'; c.fill(); c.stroke();
-    c.fillStyle = NAVY; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText(b.name, dx, wallTop + 28);
-    if (!b.open) label(c, 'Coming soon', dx, b.y + 50, '#FFD66B', NAVY, 20);
-    else if (family >= 60) { // family goal 2: balloons on every open building
-      [['#FF4F6D', -1], ['#5AA9FF', 1]].forEach(function (q) {
-        var bx = b.x + b.w / 2 + q[1] * (b.w / 2 - 20), by = b.y - 46;
-        c.lineWidth = 2; c.beginPath(); c.moveTo(bx, b.y + 4); c.lineTo(bx, by + 22); c.stroke();
-        c.lineWidth = 3; c.fillStyle = q[0]; c.beginPath(); c.ellipse(bx, by, 18, 23, 0, 0, 7); c.fill(); c.stroke();
-      });
-    }
-  }
-  function drawTree(c, x, y) {
-    c.lineWidth = 3.5; c.strokeStyle = NAVY;
-    c.fillStyle = 'rgba(27,42,73,0.16)'; c.beginPath(); c.ellipse(x, y, 40, 12, 0, 0, 7); c.fill();
-    rr(c, x - 9, y - 50, 18, 52, 6); c.fillStyle = '#8C6239'; c.fill(); c.stroke();
-    c.fillStyle = '#3F9A53'; c.beginPath(); c.arc(x, y - 82, 46, 0, 7); c.fill(); c.stroke();
-    c.fillStyle = '#58B56B'; c.beginPath(); c.arc(x - 12, y - 94, 20, 0, 7); c.fill();
-  }
-  function drawFountain(c, x, y, t) {
-    c.lineWidth = 4; c.strokeStyle = NAVY;
-    c.fillStyle = '#CFC9BC'; c.beginPath(); c.ellipse(x, y - 14, 86, 34, 0, 0, 7); c.fill(); c.stroke();
-    c.fillStyle = '#7CCBFF'; c.beginPath(); c.ellipse(x, y - 18, 70, 24, 0, 0, 7); c.fill(); c.stroke();
-    rr(c, x - 10, y - 74, 20, 58, 6); c.fillStyle = '#CFC9BC'; c.fill(); c.stroke();
-    c.strokeStyle = '#BFE9FF'; c.lineWidth = 5; c.lineCap = 'round';
-    for (var i = -1; i <= 1; i += 2) { c.beginPath(); c.moveTo(x, y - 76); c.quadraticCurveTo(x + i * 26, y - 112 - Math.sin(t * 4) * 5, x + i * 42, y - 26); c.stroke(); }
-  }
-  function drawTrophy(c, x, y) {
-    c.lineWidth = 4; c.strokeStyle = NAVY; c.lineJoin = 'round';
-    rr(c, x - 34, y - 26, 68, 26, 6); c.fillStyle = '#8C6239'; c.fill(); c.stroke();
-    rr(c, x - 8, y - 56, 16, 32, 4); c.fillStyle = '#FFC933'; c.fill(); c.stroke();
-    c.beginPath(); c.moveTo(x - 36, y - 124); c.lineTo(x + 36, y - 124); c.quadraticCurveTo(x + 34, y - 62, x, y - 54); c.quadraticCurveTo(x - 34, y - 62, x - 36, y - 124); c.closePath(); c.fill(); c.stroke();
-    starPath(c, x, y - 96, 15); c.fillStyle = '#fff'; c.fill();
-  }
-
+  // ---------- render the town (the scenery itself is drawn by scene.js) ----------
   function render(t) {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.fillStyle = '#4FA05A'; ctx.fillRect(0, 0, W, H);
@@ -588,46 +542,14 @@
     var c = ctx;
     c.setTransform(dpr * scale, 0, 0, dpr * scale, -cx * dpr * scale, -cy * dpr * scale);
 
-    // ground
-    rr(c, 0, 0, world.w, world.h, 40); c.fillStyle = '#7BD389'; c.fill();
-    c.fillStyle = '#8ADB96';
-    for (var i = 0; i < 30; i++) { c.beginPath(); c.ellipse((i * 397) % world.w, (i * 613) % world.h, 70, 26, 0, 0, 7); c.fill(); }
-    if (family >= 120) { // family goal 3: rainbow behind the gallery
-      ['#FF4F6D', '#FF9F43', '#FFD66B', '#4FA05A', '#5AA9FF', '#9B6BFF'].forEach(function (col, n) {
-        c.strokeStyle = col; c.lineWidth = 16; c.beginPath(); c.arc(1200, 470, 420 - n * 16, Math.PI, 0); c.stroke();
-      });
-    }
-    // paths
-    c.strokeStyle = '#EBD9A4'; c.lineWidth = 74; c.lineCap = 'round'; c.lineJoin = 'round';
-    world.buildings.forEach(function (b) {
-      var d = doorOf(b);
-      c.beginPath(); c.moveTo(world.spawn.x, world.spawn.y); c.lineTo(d.x, world.spawn.y); c.lineTo(d.x, d.y - 20); c.stroke();
-    });
-    var g = world.playground;
-    c.beginPath(); c.moveTo(world.spawn.x, world.spawn.y); c.lineTo(g.x + g.w / 2, world.spawn.y); c.lineTo(g.x + g.w / 2, g.y + g.h); c.stroke();
-    c.fillStyle = '#EBD9A4'; c.beginPath(); c.arc(world.spawn.x, world.spawn.y, 160, 0, 7); c.fill();
-    // playground
-    rr(c, g.x, g.y, g.w, g.h, 36); c.fillStyle = '#F6E2A8'; c.fill();
-    c.setLineDash([18, 14]); c.lineWidth = 5; c.strokeStyle = tag.on ? '#FF4F6D' : '#C9A85C'; c.stroke(); c.setLineDash([]);
-    c.lineWidth = 4; c.strokeStyle = NAVY; c.lineJoin = 'round';
-    c.fillStyle = '#5AA9FF'; c.beginPath(); c.moveTo(g.x + 70, g.y + 250); c.lineTo(g.x + 150, g.y + 110); c.lineTo(g.x + 176, g.y + 110); c.lineTo(g.x + 176, g.y + 250); c.closePath(); c.fill(); c.stroke();
-    c.fillStyle = '#FF7A45'; c.beginPath(); c.arc(g.x + 360, g.y + 230, 30, 0, 7); c.fill(); c.stroke();
-    c.fillStyle = '#fff'; c.beginPath(); c.arc(g.x + 350, g.y + 220, 9, 0, 7); c.fill();
-    label(c, 'Playground · Tag', g.x + g.w / 2, g.y + 62, '#fff', NAVY, 26);
+    var view = { x: cx, y: cy, w: vw, h: vh }, st = { family: family, tag: tag.on }, i;
+    Scene.setRes(dpr * scale);
+    Scene.ground(c, world, view, t, st);
 
     // everything that can overlap, sorted from back to front
     var items = [];
-    world.buildings.forEach(function (b) { items.push({ y: b.y + b.h, d: function () { drawBuilding(c, b); } }); });
-    TREES.forEach(function (q) { items.push({ y: q[1], d: function () { drawTree(c, q[0], q[1]); } }); });
-    if (family >= 25) items.push({ y: 660, d: function () { drawFountain(c, 1200, 660, t); } });
-    if (family >= 200) items.push({ y: 1010, d: function () { drawTrophy(c, 1400, 1010); } });
-    stars.forEach(function (s) {
-      items.push({ y: s.y, d: function () {
-        var bob = Math.sin(t * 3 + s.id) * 6;
-        c.fillStyle = 'rgba(27,42,73,0.16)'; c.beginPath(); c.ellipse(s.x, s.y + 6, 18, 6, 0, 0, 7); c.fill();
-        starPath(c, s.x, s.y - 30 + bob, 24); c.fillStyle = '#FFC933'; c.fill(); c.lineWidth = 3.5; c.strokeStyle = NAVY; c.lineJoin = 'round'; c.stroke();
-      } });
-    });
+    Scene.items(c, world, view, t, st, items);
+    stars.forEach(function (s) { items.push({ y: s.y, d: function () { Scene.star(c, s, t); } }); });
     Object.keys(players).forEach(function (id) {
       var p = players[id];
       if (p.room !== 'town' || (p.id !== me && !p.placed)) return;
@@ -642,6 +564,7 @@
     });
     items.sort(function (a, b) { return a.y - b.y; });
     for (i = 0; i < items.length; i++) items[i].d();
+    Scene.sky(c, world, view, t);
 
     // joystick
     if (joy) {

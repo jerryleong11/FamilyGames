@@ -20,7 +20,8 @@ family-town/
     server.js        game server
     words.js         word list (EN / 中文 / pinyin / BM)
     shop.js          growth data: level thresholds, shop catalogue, daily quest pool
-    public/          index.html, style.css, game.js, design-dress.js, design-car.js, sound.js
+    public/          index.html, style.css, game.js, design-dress.js, design-car.js, sound.js,
+                     scene.js (the 2.5D town scenery: buildings, ground, trees, stars)
   releases/v1, v2..  frozen copies made by the release tool (+ version.json)
   live.json          which release the kids' server runs: {"version":"v3","previous":"v2"}
   data/live/         kids' saves and gallery (never touched by a release)
