@@ -1,0 +1,4 @@
+# keep the macOS/Linux scripts runnable and the Windows scripts Windows-style
+*.sh      text eol=lf
+*.command text eol=lf
+*.bat     text eol=crlf

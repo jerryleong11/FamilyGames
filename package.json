@@ -1,0 +1,19 @@
+{
+  "name": "family-town",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Family Town: a multiplayer family game hosted on the home laptop",
+  "scripts": {
+    "live": "node tools/run.js live",
+    "dev": "node tools/run.js dev",
+    "release": "node tools/release.js",
+    "rollback": "node tools/release.js --rollback",
+    "status": "node tools/release.js --status"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "engines": {
+    "node": ">=16.7"
+  }
+}

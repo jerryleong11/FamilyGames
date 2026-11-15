@@ -1,0 +1,7 @@
+# saved games and gallery pictures stay on this laptop
+data/*/save.json
+data/*/gallery
+*.tmp
+
+# restored with: npm install
+node_modules/
