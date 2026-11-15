@@ -245,7 +245,7 @@
   var cardWord = null, cardTimer = null;
   function showCard(w) {
     cardWord = w;
-    $('cardPic').textContent = w.pic; $('cardEn').textContent = w.en; $('cardZh').textContent = w.zh + '  ' + w.py; $('cardMs').textContent = w.ms;
+    $('cardPic').textContent = w.pic; $('cardEn').textContent = w.en; $('cardZh').innerHTML = esc(w.zh) + ' ' + pyHtml(w); $('cardMs').textContent = w.ms;
     $('card').hidden = false;
     clearTimeout(cardTimer); cardTimer = setTimeout(function () { $('card').hidden = true; }, 7000);
   }
@@ -601,7 +601,9 @@
     $('studio').hidden = false; $('hud').hidden = true; $('card').hidden = true;
     sClear(); fitPaper(); renderGuess();
   }
-  function word3(w) { return '<b>' + esc(w.en) + '</b> · ' + esc(w.zh) + ' ' + esc(w.py) + ' · ' + esc(w.ms); }
+  // Pinyin gets its own span: the Fredoka font draws "ī" wrongly, so .py uses the device font.
+  function pyHtml(w) { return '<span class="py">' + esc(w.py) + '</span>'; }
+  function word3(w) { return '<b>' + esc(w.en) + '</b> · ' + esc(w.zh) + ' ' + pyHtml(w) + ' · ' + esc(w.ms); }
   function onGuess(m) {
     var was = g.phase;
     g.phase = m.phase; g.drawer = m.drawer; g.ends = Date.now() + m.left; g.guessed = m.guessed || [];
@@ -634,7 +636,7 @@
       g.options.forEach(function (w, i) {
         var row = document.createElement('div'); row.className = 'opt';
         var b = document.createElement('button'); b.type = 'button'; b.className = 'pick' + (g.wrong.indexOf(i) >= 0 ? ' bad' : '');
-        b.innerHTML = '<b>' + esc(w.en) + '</b><span>' + esc(w.zh) + ' ' + esc(w.py) + '</span><span>' + esc(w.ms) + '</span>';
+        b.innerHTML = '<b>' + esc(w.en) + '</b><span>' + esc(w.zh) + ' ' + pyHtml(w) + '</span><span>' + esc(w.ms) + '</span>';
         b.disabled = got || g.wrong.indexOf(i) >= 0;
         b.onclick = function () { send({ t: 'guessTry', i: i }); };
         var s = document.createElement('button'); s.type = 'button'; s.className = 'say'; s.textContent = '🔊'; s.setAttribute('aria-label', 'Hear ' + w.en);
