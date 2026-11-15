@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#7BD389">
+<title>Family Town</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 64 64%27%3E%3Crect x=%278%27 y=%278%27 width=%2748%27 height=%2748%27 rx=%2714%27 fill=%27%23FF7A45%27 stroke=%27%231B2A49%27 stroke-width=%274%27/%3E%3Ccircle cx=%2724%27 cy=%2728%27 r=%276%27 fill=%27%23fff%27/%3E%3Ccircle cx=%2740%27 cy=%2728%27 r=%276%27 fill=%27%23fff%27/%3E%3C/svg%3E">
+<link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<canvas id="town" aria-label="Town map"></canvas>
+
+<!-- Join screen -->
+<div id="join" class="screen">
+  <form id="joinForm" class="card">
+    <h1>Family Town</h1>
+    <p class="sub">Play together: kids, mum and dad</p>
+    <div class="joinRow">
+      <canvas id="preview" width="150" height="170" aria-hidden="true"></canvas>
+      <div class="joinFields">
+        <label for="nameIn">Your name</label>
+        <input id="nameIn" type="text" maxlength="12" autocomplete="off" placeholder="Type your name">
+        <div class="lbl" id="colorLbl">Colour</div>
+        <div id="colors" class="swatches" role="group" aria-labelledby="colorLbl"></div>
+        <div class="lbl" id="hatLbl">Hat</div>
+        <div id="hats" class="chips" role="group" aria-labelledby="hatLbl"></div>
+        <label class="check"><input id="bigIn" type="checkbox"> I am a grown-up</label>
+      </div>
+    </div>
+    <p id="joinErr" class="err" role="alert"></p>
+    <button id="playBtn" class="btn primary big" type="submit">Play</button>
+  </form>
+</div>
+
+<!-- Town HUD -->
+<div id="hud" hidden>
+  <div class="topBar">
+    <div class="topLeft">
+      <div class="pill dark" title="Stars you can spend"><span class="ico">⭐</span><span id="myStars">0</span></div>
+      <div class="pill lvl" id="lvPill" title="Your level" hidden><b id="lvNum">Lv 1</b><span class="lvBar"><i id="lvFill"></i></span></div>
+      <div class="pill" id="jar" title="Stars the whole family has collected"><span class="ico">🏺</span><span id="famStars">0</span><span class="small" id="famGoal"></span></div>
+      <div class="pill warn" id="tagPill" hidden></div>
+    </div>
+    <div class="topRight">
+      <div id="who" class="who"></div>
+      <button id="questBtn" class="round quest" type="button" aria-label="Quests" data-quiet hidden>📋<i id="questDot" class="dot" hidden></i></button>
+      <button id="sndBtn" class="round" type="button" aria-label="Sound" hidden>🔊</button>
+      <button id="fsBtn" class="round" type="button" aria-label="Full screen">⛶</button>
+    </div>
+  </div>
+  <div id="emotes" class="emotes" hidden></div>
+  <button id="emoteBtn" class="round bigRound" type="button" aria-label="Emotes">😊</button>
+  <button id="driveBtn" class="round bigRound drive" type="button" aria-label="Drive my car" data-quiet hidden>🚗</button>
+  <button id="actBtn" class="btn primary action" type="button" data-quiet hidden></button>
+</div>
+
+<div id="toast" class="toast" role="status" hidden></div>
+<div id="lost" class="lost" hidden>Connection lost. Trying again…</div>
+
+<!-- Level-up and daily-chest celebration: only the card takes taps, the town stays playable around it -->
+<div id="celeb" class="celeb" hidden>
+  <canvas id="confetti" aria-hidden="true"></canvas>
+  <button id="celebCard" class="celebCard" type="button" data-quiet></button>
+</div>
+
+<!-- Quests: three a day, then the daily chest -->
+<div id="quests" class="screen quests" hidden>
+  <div class="qPanel" role="dialog" aria-label="Quests">
+    <div class="qHead">
+      <h2>Quests <span class="tri">任务 <span class="py">rènwu</span> · Misi</span></h2>
+      <div id="qLv" class="qLv"></div>
+      <button id="exitQuests" class="btn" type="button" data-quiet>Back</button>
+    </div>
+    <div id="qList" class="qList"></div>
+    <div id="qChest" class="qChest" hidden></div>
+  </div>
+</div>
+
+<!-- Art Studio -->
+<div id="studio" class="screen studio" hidden>
+  <div class="tools">
+    <div id="palette" class="palette" role="group" aria-label="Colours"></div>
+    <div id="sizes" class="sizes" role="group" aria-label="Brush size"></div>
+    <button id="eraserBtn" class="btn tool" type="button">Eraser</button>
+    <button id="clearBtn" class="btn tool" type="button">Clear</button>
+    <button id="saveBtn" class="btn tool" type="button">Hang in Gallery</button>
+  </div>
+  <div class="stage">
+    <div id="sStatus" class="status"></div>
+    <div id="sWrap" class="wrap"><canvas id="paper" width="960" height="600" aria-label="Shared drawing paper"></canvas></div>
+  </div>
+  <div class="side">
+    <h2>Art Studio</h2>
+    <div id="sWho" class="who col"></div>
+    <div id="sOptions" class="options"></div>
+    <button id="guessBtn" class="btn primary" type="button">Guessing game</button>
+    <button id="exitStudio" class="btn" type="button" data-quiet>Back to town</button>
+  </div>
+</div>
+
+<!-- Gallery -->
+<div id="gallery" class="screen gallery" hidden>
+  <div class="galHead"><h2>Family Gallery</h2><button id="exitGallery" class="btn" type="button" data-quiet>Back to town</button></div>
+  <div id="galGrid" class="galGrid"></div>
+</div>
+
+<script src="sound.js"></script>
+<script src="design-dress.js"></script>
+<script src="design-car.js"></script>
+<script src="scene.js"></script>
+<!-- One file per game. Each registers itself in window.FTGames; game.js (last) starts them. See docs/GAME-MODULES.md -->
+<script src="games/pets.js"></script>
+<script src="games/race.js"></script>
+<script src="games/obby.js"></script>
+<script src="games/boss.js"></script>
+<script src="games/monopoly.js"></script>
+<script src="games/escape.js"></script>
+<script src="games/plot.js"></script>
+<script src="game.js"></script>
+</body>
+</html>
