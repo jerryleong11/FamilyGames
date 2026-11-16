@@ -109,14 +109,14 @@ Sections 4 to 7 describe release v1. This is what changed in Claude Code on the 
 - **v4 (released):** everything in the list above.
 - **v5 (released, live):** pinch zoom of the town and the town map (`map.js`): mini map, big map with each person's area, guide arrow.
 
-### Paused work: a boy in Dress-Up (paused 2026-11-15 on the owner's request)
+### A boy in Dress-Up (finished 2026-11-16, in `dev/`, see git log for whether it is released)
 
-The owner asked for a boy to choose in Dress-Up. It is half done and NOT released.
+The owner asked for a boy to choose in Dress-Up. The work was paused once on his request and resumed the next day.
 
-- **Done, on `main`, tested (15 server checks):** the boy's shop items and prices in `dev/shop.js`, the boy's free fallback look (`FREE.outfitBoy`, used by `enforce` in `dev/server.js` when an outfit has `body: 1`), and `game.js` showing boy items on the boy in the level-up card.
-- **Half done, on the branch `wip-boy-dress-up`:** `dev/public/design-dress.js` only. About 480 lines were added by an agent that was stopped mid-task; it passes a syntax check but was never reviewed or looked at in a browser. `main` still has the last released version of that file, so `main` is safe to release as it is.
-- **To resume:** `git checkout wip-boy-dress-up -- dev/public/design-dress.js`, then finish, test and review it, and commit it on `main`. The branch can be deleted afterwards.
-- **The specification the drawing must meet:**
+- `dev/shop.js` has the boy's paid items; `FREE.outfitBoy` is the boy's free fallback look, used by `enforce` in `dev/server.js` when an outfit has `body: 1`; `game.js` shows boy items on the boy in the level-up card.
+- `dev/public/design-dress.js` draws the boy and has the Girl / Boy switch. A test recorded the canvas calls of 1290 old designs before and after: none differ, so saved outfits look as before.
+- Looked at in a desktop browser at 1280x800 and 800x480 (all outfits, hair and items on both bodies, the switch, trying on and buying). Not seen on a tablet.
+- **What it does:**
   - New design key `body`: 0 girl (also when missing), 1 boy. Same proportions and anchor points as the girl.
   - Appended option values, never renumbered: `hair` 6 Short, 7 Spiky, 8 Side part, 9 Curly top, 10 Buzz cut, 11 Quiff; `dress` 6 T-shirt and shorts, 7 Hoodie and jeans, 8 Football kit, 9 Superhero suit, 10 Knight armour, 11 Astronaut suit; `head` 6 Cap, 7 Knight helmet, 8 Headphones; `back` 4 Backpack, 5 Jetpack; `item` 5 Football, 6 Sword, 7 Toy robot.
   - `defaults(1)` gives the boy starter look from free options only: hair 6, dress 6, head 0, back 0, item 5.
