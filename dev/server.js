@@ -49,7 +49,9 @@ const WORLD = {
     { id: 'race', name: 'Race Track', x: 2480, y: 560, w: 300, h: 250, open: false, wall: '#D6E4FF', roof: '#3B5BDB' },
     { id: 'obby', name: 'Obby Tower', x: 2940, y: 560, w: 300, h: 250, open: false, wall: '#D3F9D8', roof: '#37B24D' },
     { id: 'boss', name: 'Monster Cave', x: 2440, y: 1090, w: 360, h: 250, open: false, wall: '#FFD8D8', roof: '#C92A2A' },
-    { id: 'plot', name: 'Home Street', x: 2900, y: 1090, w: 360, h: 250, open: false, wall: '#FFE8CC', roof: '#A05A2C' }
+    { id: 'plot', name: 'Home Street', x: 2900, y: 1090, w: 360, h: 250, open: false, wall: '#FFE8CC', roof: '#A05A2C' },
+    // west of the Dress-Up shop, on the main street
+    { id: 'rocket', name: 'Rocket Base', x: 250, y: 580, w: 320, h: 250, open: false, wall: '#E3FAFC', roof: '#0C8599' }
   ],
   playground: { x: 1680, y: 200, w: 480, h: 340 },
   goals: [25, 60, 120, 200]
@@ -516,7 +518,7 @@ function onLeave(ws) {
 }
 
 // ---------- game modules: every game in games/<id>.js plugs in through this api (docs/GAME-MODULES.md) ----------
-const GAMES = ['pets', 'race', 'obby', 'boss', 'monopoly', 'escape', 'plot'];
+const GAMES = ['pets', 'race', 'obby', 'boss', 'monopoly', 'escape', 'plot', 'rocket'];
 const handlers = {}, rooms = {}, joiners = [], quitters = [];
 function guard(what, fn) { try { return fn(); } catch (e) { console.error('Game module error (' + what + '):', e); } }
 function spend(p, n) { // takes stars from what the player can spend; false when there are not enough

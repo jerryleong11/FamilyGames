@@ -11,7 +11,7 @@ client file with the same id. Modules never edit the core files; they plug in th
 
 The id is used for everything: the building in `WORLD.buildings`, the room name, the message prefix
 (`<id>.something`), the saved data (`profile[<id>]`, `save[<id>]`) and `players[].ext[<id>]`.
-Ids today: `pets`, `race`, `obby`, `boss`, `monopoly`, `escape`, `plot`.
+Ids today: `pets`, `race`, `obby`, `boss`, `monopoly`, `escape`, `plot`, `rocket`.
 
 A module that fails to load is logged and its building stays "coming soon"; the rest of the game is unaffected.
 

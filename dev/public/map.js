@@ -5,7 +5,7 @@
 (function () {
   'use strict';
   var TAU = Math.PI * 2;
-  var ICON = { studio: '🎨', gallery: '🖼️', dress: '👗', cars: '🚗', pets: '🐾', monopoly: '🎲', escape: '🗝️', race: '🏁', obby: '🧗', boss: '👾', plot: '🏡' };
+  var ICON = { studio: '🎨', gallery: '🖼️', dress: '👗', cars: '🚗', pets: '🐾', monopoly: '🎲', escape: '🗝️', race: '🏁', obby: '🧗', boss: '👾', plot: '🏡', rocket: '🚀' };
   var api = null, mini = null, root = null, big = null, listEl = null, bigTimer = 0;
   var target = null;   // { kind: 'b', id } a building, or { kind: 'p', key } a player (by name, which survives a reconnect)
   var tracks = {};     // player id -> { x, y, t, a } to work out which way somebody is walking

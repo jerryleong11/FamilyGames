@@ -19,7 +19,7 @@
   // ---------- state ----------
   var ws = null, me = 0, world = null, version = null, joined = false, room = 'town';
   var GAMES = window.FTGames = window.FTGames || {}; // pets, race, obby ...: one file each in games/, see docs/GAME-MODULES.md
-  var ROOM_ICON = { studio: '🎨', pets: '🐾', race: '🏁', obby: '🧗', boss: '👾', monopoly: '🎲', escape: '🗝️', plot: '🏡' };
+  var ROOM_ICON = { studio: '🎨', pets: '🐾', race: '🏁', obby: '🧗', boss: '👾', monopoly: '🎲', escape: '🗝️', plot: '🏡', rocket: '🚀' };
   var pops = []; // "+1" floating up from my player when stars come in
   var players = {}, stars = [], family = 0;
   var my = { x: 0, y: 0, f: 1, m: 0 };
