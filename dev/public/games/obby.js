@@ -1,14 +1,18 @@
 // Obby Tower (client): an obstacle course seen from the side that climbs a tower.
 // The running and jumping is simulated here on the tablet; the server (dev/games/obby.js) owns the flags
 // reached, the stars, the clocks, the rounds and the records. Everyone in the same place sees the others climb.
-// Two towers of 30 hand-made stages in five chapters (garden, castle, ice, clouds, space), and five ways to play
-// them, chosen at the entrance: Climb, Race (a chapter, everybody at once, alone against the ghost of your best race),
-// Rising lava (the last one climbing wins), the Endless tower (made by code from the seed of the day) and Rope Team
-// (two to four climbers tied together by a stretchy rope climb a chapter as one team: a flag counts only when everybody
-// stands on it, whoever falls hangs on the rope and is pulled up or climbs it, and when the whole team is under its
-// last flag everybody goes back to that flag together).
+// Three towers of 30 hand-made stages in five chapters: the Easy and the Hard tower (garden, castle, ice, clouds, space)
+// and the Dragon Tower, harder than Hard (volcano, fire cave, crystal cave, storm, the dragon's nest, with the dragon on
+// top). Five ways to play them, chosen at the entrance: Climb, Race (a chapter, everybody at once, alone against the
+// ghost of your best race), Rising lava (the last one climbing wins), the Endless tower (made by code from the seed of
+// the day) and Rope Team (climbers tied together by a stretchy rope climb a chapter as one team: a flag counts only when
+// everybody on the rope stands on it, whoever falls hangs on the rope and is pulled up or climbs it, and when the whole
+// team is under its last flag everybody goes back to that flag together). A rope holds 2, 3 or 4 climbers (whoever opens
+// the round picks), and there can be two of them, the Red Rope and the Blue Rope: everybody picks a rope at the entrance,
+// both climb the same chapter at the same time, and the first one at the top has won. The other rope is on the screen
+// too (its rope and its name tags in its colour, a little fainter); it cannot be touched.
 // The panel at the right edge shows everybody in the room; a tap on somebody or a drag along the height bar looks
-// away from your own player (only on this tablet), a move or a jump comes back.
+// away from your own player (only on this tablet), a move or a jump comes back. (Roped, the game goes on meanwhile.)
 (function () {
   'use strict';
   var api = null;
@@ -23,7 +27,8 @@
   var COYOTE = 0.13;                  // still allowed to jump this long after running off an edge
   var BUFFER = 0.16;                  // a jump pressed this long before landing still counts
   var VBACK = 2.6;                    // seconds until a vanished cloud comes back
-  var HEAD = 30, THICK = 18;          // Hard tower: platforms are solid from below (head height, platform thickness)
+  var KBACK = 3.2;                    // seconds until a slab that crumbled is whole again
+  var HEAD = 30, THICK = 18;          // Hard and Dragon tower: platforms are solid from below (head height, platform thickness)
   var AV = 0.5;                       // avatar scale
   var EV_JUMP = 1, EV_DJUMP = 2, EV_LAND = 4, EV_BOUNCE = 8, EV_DIE = 16, EV_FLAG = 32, EV_BONK = 64, EV_TP = 128;
   var ICE = 420;                      // how fast you speed up and slow down on ice (2800 on everything else)
@@ -42,8 +47,16 @@
   //   i x y w                 ice: slippery                ic x y drop seconds [phase]           icicle that hangs at y and falls `drop`
   //   tp x y x2 y2            door at (x, y) to (x2, y2)   lz x y len up seconds on [phase]      laser from (x, y), `len` long to the right
   //                                                        (up = 1: upwards), on for the part `on` of its seconds
+  //   k x y w                 stone slab that crumbles a moment after it is stood on (and is whole again a little later)
+  //   sp x y w seconds on [phase]         spikes in the top of the platform at (x, y): out for the part `on` of their seconds
+  //   bl x y w seconds on [phase]         ember stone: a platform that is only there for the part `on` of its seconds
+  //   fj x y len dir seconds on [phase]   fire jet from the nozzle at (x, y), `len` long (dir 0 right, 1 up, 2 left, 3 down)
+  //   lt x w lo hi seconds [phase]        lava pool from x, `w` wide, whose surface rises from `lo` to `hi` and sinks again
   //   a stage with g: 0.5 has half the gravity
-  // The first 12 stages of each tower are the tower as it was first released: never change them (flags and times were set on them).
+  // Everything that hurts on a rhythm shows it first: spikes peek out, a jet sputters, an ember stone flickers before it goes out.
+  // The Easy tower is never changed (the youngest climbs it; flags and times were set on its stages). The Hard tower was
+  // rebuilt once (layout 2, see `LAYOUT` in dev/games/obby.js: the times of the old stages are kept apart on the server).
+  var TOWER_IDS = ['easy', 'hard', 'dragon'];      // every tower there is, easiest first (the server has the same list)
   var TOWERS = {
     // Easy: wide platforms you can also jump up through from below, slow hazards
     easy: {
@@ -117,89 +130,174 @@
         { h: 700, g: 0.5, flag: [500, 240], it: [['b', 380, 40, 110], ['p', 100, 440, 220], ['m', 380, 560, 140, 180, 0, 5.5], ['lz', 180, 630, 440, 0, 3.4, 0.4]] }
       ]
     },
-    // Hard: small stone platforms that are solid from below (go round the edge), fast hazards
+    // Hard (layout 2): small stone platforms that are solid from below (go round the edge), gaps that need the jump in the
+    // air, fast hazards, slabs that crumble and spikes on a rhythm
     hard: {
-      vanish: 0.65, solid: true, wall: '#C9C2DE', trim: '#8C6BE8', looks: ['h0', 'h1', 'h2', 'h3', 'h4'],
+      vanish: 0.6, crumble: 0.55, solid: true, far: 1, wall: '#C9C2DE', trim: '#8C6BE8', looks: ['h0', 'h1', 'h2', 'h3', 'h4'],
       sky: [['#F29A6B', '#FFE3AE'], ['#8E5BD0', '#F7A6B5'], ['#17153F', '#4B3A8C']],
       cols: ['#6FA8DC', '#E57373', '#9575CD', '#F06292', '#4DB6AC', '#FFB74D', '#7986CB', '#81C784', '#4FC3F7', '#BA68C8', '#FF8A65', '#FFD54F'],
       top: [200, 400],
       stages: [
-        // 1 hop and skip
-        { h: 420, flag: [0, 800], it: [['p', 520, 84, 110], ['p', 320, 168, 110], ['p', 130, 252, 100], ['p', 320, 336, 100]] },
-        // 2 lava hop
-        { h: 420, flag: [510, 200], it: [['p', 200, 84, 240], ['lp', 300, 84, 44], ['p', 40, 168, 130], ['l', 215, 212, 60, 20], ['p', 300, 252, 130], ['p', 520, 336, 110]] },
-        // 3 crumbling clouds
-        { h: 420, flag: [640, 160], it: [['v', 470, 84, 90], ['v', 300, 168, 90], ['v', 130, 252, 90], ['v', 20, 336, 90]] },
+        // 1 the long hops
+        { h: 420, flag: [0, 800], it: [['p', 610, 84, 70], ['p', 345, 168, 70], ['p', 80, 252, 70], ['p', 345, 336, 70]] },
+        // 2 crumbling stairs
+        { h: 420, flag: [560, 180], it: [['k', 305, 84, 70], ['k', 50, 168, 70], ['k', 305, 252, 70], ['p', 120, 336, 70]] },
+        // 3 the spike tunnel: under the slab there is no jumping over them
+        { h: 420, flag: [360, 170], it: [['p', 470, 84, 320], ['p', 330, 160, 390], ['sp', 550, 84, 160, 3, 0.6], ['p', 190, 244, 80], ['k', 30, 328, 70]] },
         // 4 bounce over the lava
-        { h: 520, flag: [190, 220], it: [['l', 430, 20, 370, 30], ['b', 490, 60, 56], ['p', 650, 250, 100], ['b', 480, 275, 56], ['p', 250, 470, 110]] },
-        // 5 belts and spikies
-        { h: 420, flag: [0, 190], it: [['c', 260, 84, 240, -110], ['z', 300, 100, 160, 0, 3], ['p', 580, 168, 110], ['c', 300, 252, 200, 120], ['c', 40, 336, 190, -120], ['z', 80, 352, 110, 0, 2.6]] },
-        // 6 windmills to jump over
-        { h: 420, flag: [200, 220], it: [['p', 380, 84, 320], ['s', 570, 97, 52, 2.0, 2], ['p', 730, 168, 70], ['p', 340, 252, 350], ['s', 510, 265, 52, -2.2, 2, 1], ['p', 210, 336, 90]] },
+        { h: 520, flag: [200, 180], it: [['l', 400, 20, 400, 30], ['b', 470, 50, 46], ['m', 560, 250, 70, 160, 0, 2.6], ['b', 744, 275, 46], ['p', 520, 460, 70]] },
+        // 5 against the belts
+        { h: 420, flag: [300, 170], it: [['c', 520, 84, 270, -190], ['z', 560, 100, 150, 0, 1.8], ['p', 730, 168, 60], ['c', 400, 252, 220, 190], ['sp', 470, 252, 80, 2, 0.6], ['k', 210, 336, 60]] },
+        // 6 windmills
+        { h: 420, flag: [20, 170], it: [['p', 240, 84, 320], ['s', 400, 97, 80, 2.8, 2], ['k', 640, 168, 64], ['p', 350, 252, 220], ['s', 460, 265, 56, -3.2, 2, 1], ['k', 210, 336, 64]] },
         // 7 windy gaps
-        { h: 420, flag: [40, 200], it: [['wind', 250, 0, 550, 200, -90, 0], ['p', 290, 84, 120], ['p', 510, 168, 100], ['wind', 60, 230, 560, 200, -130, 0], ['p', 200, 252, 100], ['wind', 0, 270, 100, 180, 0, 2600]] },
+        { h: 420, flag: [330, 180], it: [['wind', 520, 0, 280, 210, -130, 0], ['p', 570, 84, 70], ['p', 370, 168, 60], ['wind', 0, 210, 800, 180, 160, 0], ['p', 210, 252, 60], ['p', 400, 336, 60]] },
         // 8 swingers
-        { h: 420, flag: [110, 220], it: [['sw', 500, 234, 169, 100, 0.7, 3.8], ['p', 700, 168, 100], ['p', 340, 252, 300], ['w', 490, 402, 110, 1.1, 2.8], ['p', 190, 336, 100]] },
+        { h: 420, flag: [570, 180], it: [['sw', 380, 250, 170, 100, 0.7, 3.6], ['p', 130, 168, 80], ['sw', 330, 380, 150, 100, 0.7, 3.6, 0.5], ['p', 50, 336, 80]] },
         // 9 the big wheel
-        { h: 504, flag: [360, 200], it: [['l', 580, 20, 220, 30], ['o', 610, 180, 120, 90, 7, 0], ['o', 610, 180, 120, 90, 7, 0.3333], ['o', 610, 180, 120, 90, 7, 0.6667], ['p', 350, 336, 100], ['p', 540, 420, 110]] },
-        // 10 vanish and move
-        { h: 420, flag: [300, 200], it: [['m', 560, 84, 90, 150, 0, 3.2], ['v', 700, 168, 90], ['v', 530, 252, 90], ['m', 180, 336, 90, 200, 0, 3.4]] },
+        { h: 504, flag: [300, 170], it: [['l', 480, 20, 320, 30], ['o', 620, 190, 125, 60, 4, 0], ['o', 620, 190, 125, 60, 4, 0.5], ['z', 620, 190, 0, 0, 1], ['p', 330, 340, 60], ['z', 300, 356, 60, 0, 1.6], ['k', 520, 420, 64]] },
+        // 10 lifts and a cloud
+        { h: 420, flag: [270, 190], it: [['m', 500, 84, 64, 190, 0, 2.4], ['k', 726, 168, 60], ['m', 420, 252, 64, 200, 0, 2.4, 0.5], ['v', 220, 336, 64]] },
         // 11 the gauntlet
-        { h: 504, flag: [0, 170], it: [['c', 230, 84, 330, -130], ['w', 395, 234, 105, 1.1, 2.4], ['p', 630, 168, 90], ['p', 270, 252, 310], ['s', 420, 265, 50, 2.4, 2], ['v', 110, 336, 100], ['b', 20, 362, 56]] },
+        { h: 504, flag: [0, 170], it: [['c', 230, 84, 330, -160], ['w', 395, 250, 115, 1.1, 2.2], ['sp', 470, 84, 70, 2.2, 0.45, 0.5], ['p', 640, 168, 80], ['p', 300, 252, 280], ['s', 440, 265, 62, 2.8, 2], ['k', 150, 336, 70], ['b', 30, 362, 50]] },
         // 12 the summit
-        { h: 588, flag: [120, 220], it: [['l', 400, 20, 400, 30], ['v', 420, 84, 90], ['o', 650, 230, 90, 80, 5, 0], ['o', 650, 230, 90, 80, 5, 0.5], ['p', 380, 336, 100], ['p', 20, 420, 330], ['w', 170, 570, 102, 0.9, 2.4], ['wind', 0, 420, 90, 200, 0, 2600]] },
+        { h: 588, flag: [120, 200], it: [['l', 380, 20, 420, 30], ['k', 400, 84, 70], ['o', 640, 240, 95, 70, 4.4, 0], ['o', 640, 240, 95, 70, 4.4, 0.5], ['p', 400, 336, 70], ['p', 60, 420, 250], ['sp', 150, 420, 80, 2.2, 0.5], ['w', 185, 580, 105, 0.95, 2.2], ['wind', 0, 430, 70, 150, 0, 2600]] },
         // ---- chapter 3, ice ----
         // 13 icy hops
-        { h: 420, flag: [100, 400], it: [['i', 560, 84, 130], ['i', 360, 168, 120], ['i', 160, 252, 120], ['p', 360, 336, 110]] },
+        { h: 420, flag: [100, 400], it: [['i', 600, 84, 100], ['i', 315, 168, 100], ['i', 30, 252, 100], ['p', 315, 336, 64]] },
         // 14 icicle rain
-        { h: 420, flag: [540, 200], it: [['p', 330, 84, 130], ['ic', 395, 230, 130, 2.6, 0.5], ['p', 120, 168, 130], ['ic', 185, 314, 130, 2.6], ['p', 330, 252, 130], ['p', 120, 336, 130]] },
-        // 15 slide and spikies
-        { h: 420, flag: [320, 200], it: [['i', 560, 84, 220], ['z', 600, 100, 140, 0, 2.8], ['i', 260, 168, 220], ['z', 300, 184, 140, 0, 2.4, 0.5], ['p', 60, 252, 110], ['i', 250, 336, 200]] },
+        { h: 420, flag: [520, 190], it: [['p', 320, 84, 70], ['ic', 355, 240, 140, 1.8, 0.5], ['i', 50, 168, 100], ['ic', 100, 330, 140, 1.8], ['k', 330, 252, 64], ['ic', 362, 400, 130, 1.8, 0.25], ['p', 80, 336, 64], ['ic', 112, 480, 130, 1.8, 0.75]] },
+        // 15 slide past the spikies
+        { h: 420, flag: [300, 190], it: [['i', 520, 84, 200], ['z', 570, 100, 110, 0, 1.6], ['p', 744, 168, 50], ['i', 380, 252, 240], ['z', 430, 268, 140, 0, 1.5, 0.5], ['p', 180, 336, 60]] },
         // 16 the frozen wheel
-        { h: 420, flag: [530, 180], it: [['l', 0, 20, 230, 30], ['i', 320, 84, 130], ['o', 170, 236, 105, 90, 7, 0], ['o', 170, 236, 105, 90, 7, 0.3333], ['o', 170, 236, 105, 90, 7, 0.6667], ['p', 330, 336, 110]] },
+        { h: 420, flag: [400, 190], it: [['l', 0, 20, 190, 30], ['i', 230, 84, 110], ['o', 130, 240, 100, 70, 5, 0], ['o', 130, 240, 100, 70, 5, 0.5], ['ic', 130, 420, 80, 2.5], ['i', 320, 336, 100]] },
         // 17 belts under the icicles
-        { h: 420, flag: [520, 200], it: [['c', 240, 84, 240, -110], ['ic', 330, 230, 130, 2.4], ['ic', 420, 230, 130, 2.4, 0.5], ['p', 40, 168, 120], ['c', 250, 252, 240, 120], ['p', 580, 336, 110]] },
+        { h: 420, flag: [520, 190], it: [['c', 200, 84, 260, -170], ['ic', 300, 230, 130, 1.8, 0], ['ic', 390, 230, 130, 1.8, 0.5], ['k', 0, 168, 60], ['c', 230, 252, 230, 170], ['ic', 310, 398, 130, 1.8, 0.25], ['ic', 400, 398, 130, 1.8, 0.75], ['p', 600, 336, 56]] },
         // 18 the frozen summit
-        { h: 554, flag: [300, 200], it: [['v', 560, 84, 90], ['i', 700, 168, 100], ['i', 440, 252, 180], ['b', 330, 278, 56], ['p', 120, 470, 130]] },
+        { h: 554, flag: [300, 190], it: [['v', 570, 84, 80], ['i', 710, 168, 80], ['i', 430, 252, 150], ['z', 470, 268, 70, 0, 1.6], ['b', 320, 262, 50], ['p', 110, 470, 60], ['ic', 140, 600, 110, 1.8]] },
         // ---- chapter 4, clouds ----
         // 19 the door
-        { h: 420, flag: [330, 380], it: [['p', 150, 84, 110], ['tp', 180, 84, 705, 252], ['p', 650, 252, 110], ['v', 470, 336, 90]] },
-        // 20 the crumbling stairs
-        { h: 420, flag: [240, 160], it: [['v', 460, 84, 80], ['v', 600, 168, 80], ['v', 710, 252, 90], ['tp', 770, 252, 65, 336], ['v', 20, 336, 90]] },
+        { h: 420, flag: [280, 400], it: [['v', 110, 84, 64], ['v', 280, 168, 64], ['p', 60, 252, 90], ['tp', 105, 252, 745, 252], ['k', 700, 252, 90], ['v', 520, 336, 64]] },
+        // 20 the cloud run
+        { h: 420, flag: [250, 170], it: [['v', 520, 84, 70], ['v', 700, 168, 70], ['v', 500, 252, 70], ['z', 600, 300, 0, 60, 1.6], ['v', 300, 336, 70]] },
         // 21 the storm
-        { h: 420, flag: [180, 160], it: [['wind', 340, 0, 460, 150, 90, 0], ['p', 420, 84, 100], ['p', 620, 168, 100], ['sw', 400, 380, 150, 100, 0.7, 3.8], ['p', 140, 336, 110]] },
+        { h: 420, flag: [60, 170], it: [['wind', 260, 0, 540, 190, 120, 0], ['p', 360, 84, 70], ['p', 600, 168, 70], ['wind', 0, 200, 800, 190, -120, 0], ['sw', 370, 400, 150, 80, 0.75, 3], ['p', 100, 336, 80]] },
         // 22 over the lava to the door
-        { h: 420, flag: [330, 180], it: [['p', 600, 84, 190], ['lp', 660, 84, 44], ['tp', 755, 84, 75, 252], ['p', 20, 252, 120], ['v', 220, 336, 90]] },
+        { h: 420, flag: [230, 190], it: [['l', 440, 20, 360, 30], ['k', 550, 84, 64], ['p', 690, 84, 110], ['sp', 700, 84, 50, 2, 0.6], ['tp', 775, 84, 60, 252], ['k', 20, 252, 80], ['v', 210, 336, 64]] },
         // 23 the updraft
-        { h: 504, flag: [390, 180], it: [['p', 640, 84, 110], ['wind', 650, 104, 150, 260, 0, 2600], ['p', 470, 336, 110], ['tp', 495, 336, 120, 420], ['p', 70, 420, 100]] },
+        { h: 504, flag: [400, 180], it: [['p', 660, 84, 80], ['wind', 660, 104, 140, 300, 0, 2600], ['z', 690, 210, 80, 0, 2], ['z', 770, 330, -80, 0, 2], ['k', 500, 400, 70]] },
         // 24 the sky summit
-        { h: 504, flag: [250, 180], it: [['v', 500, 84, 90], ['m', 620, 168, 90, 90, 0, 3], ['v', 470, 252, 90], ['sw', 250, 460, 150, 100, 0.7, 3.6], ['p', 0, 420, 90]] },
+        { h: 504, flag: [260, 180], it: [['v', 510, 84, 70], ['m', 640, 168, 70, 90, 0, 2.6], ['v', 470, 252, 70], ['sw', 250, 470, 150, 70, 0.8, 3], ['k', 0, 420, 80]] },
         // ---- chapter 5, space: half the gravity ----
         // 25 moon hops
-        { h: 680, g: 0.5, flag: [170, 400], it: [['p', 650, 170, 110], ['p', 380, 340, 110], ['p', 100, 510, 110]] },
-        // 26 the laser wall
-        { h: 680, g: 0.5, flag: [300, 180], it: [['p', 560, 170, 120], ['p', 300, 340, 120], ['p', 560, 510, 120], ['lz', 490, 40, 600, 1, 2.8, 0.5]] },
+        { h: 680, g: 0.5, flag: [170, 400], it: [['p', 710, 180, 60], ['p', 360, 360, 60], ['p', 20, 545, 60]] },
+        // 26 the laser gates
+        { h: 680, g: 0.5, flag: [330, 180], it: [['p', 600, 170, 80], ['p', 300, 340, 80], ['p', 600, 510, 80], ['lz', 500, 60, 600, 1, 2.4, 0.5], ['lz', 410, 60, 600, 1, 2.4, 0.5, 0.5]] },
         // 27 lifts in space
-        { h: 760, g: 0.5, flag: [240, 180], it: [['m', 500, 170, 90, 180, 0, 4], ['lz', 440, 255, 330, 0, 3, 0.45], ['v', 300, 340, 90], ['m', 100, 510, 90, 0, 120, 4]] },
+        { h: 760, g: 0.5, flag: [240, 180], it: [['m', 480, 170, 70, 200, 0, 3.2], ['lz', 430, 260, 360, 0, 2.4, 0.5], ['v', 280, 340, 70], ['lz', 60, 430, 330, 0, 2.4, 0.5, 0.5], ['m', 80, 510, 70, 0, 130, 3.2]] },
         // 28 the asteroid wheel
-        { h: 760, g: 0.5, flag: [270, 180], it: [['p', 540, 170, 100], ['o', 300, 430, 110, 90, 8, 0], ['o', 300, 430, 110, 90, 8, 0.5], ['z', 490, 520, 0, 160, 2.8], ['p', 560, 600, 110]] },
+        { h: 760, g: 0.5, flag: [270, 180], it: [['p', 560, 170, 70], ['o', 300, 330, 110, 70, 6, 0], ['o', 300, 330, 110, 70, 6, 0.5], ['z', 300, 330, 0, 0, 1], ['z', 500, 480, 0, 130, 2.4], ['k', 580, 560, 80]] },
         // 29 the laser ladder
-        { h: 680, g: 0.5, flag: [250, 180], it: [['p', 520, 170, 120], ['lz', 480, 270, 200, 0, 2.4, 0.5], ['p', 260, 340, 120], ['lz', 220, 440, 200, 0, 2.4, 0.5, 0.5], ['p', 520, 510, 120], ['lz', 480, 610, 200, 0, 2.4, 0.5]] },
+        { h: 680, g: 0.5, flag: [250, 180], it: [['p', 540, 170, 80], ['lz', 480, 265, 220, 0, 2, 0.5], ['p', 240, 340, 80], ['lz', 200, 435, 220, 0, 2, 0.5, 0.5], ['p', 540, 510, 80], ['lz', 480, 605, 220, 0, 2, 0.5], ['lz', 400, 60, 600, 1, 2, 0.5, 0.25]] },
         // 30 the last star
-        { h: 780, g: 0.5, flag: [240, 180], it: [['b', 500, 60, 56], ['v', 660, 470, 90], ['m', 380, 600, 90, 160, 0, 3.6]] }
+        { h: 780, g: 0.5, flag: [240, 180], it: [['b', 520, 60, 50], ['lz', 430, 300, 370, 0, 3, 0.5], ['k', 690, 450, 70], ['m', 420, 600, 70, 200, 0, 3], ['z', 520, 796, 60, 0, 1.5]] }
+      ]
+    },
+    // Dragon: harder than Hard. Stones as wide as a step, gaps at the edge of the jump in the air, everything the Hard
+    // tower has and three things of its own: fire jets, ember stones that go out and come back, and lava that rises and sinks.
+    dragon: {
+      vanish: 0.5, crumble: 0.4, solid: true, far: 2, wall: '#4A3F4D', trim: '#E8572A', looks: ['d0', 'd1', 'd2', 'd3', 'd4'],
+      sky: [['#3B1C3A', '#F2703A'], ['#2A1230', '#C44A2F'], ['#120A1E', '#5E2340']],
+      top: [200, 400],
+      stages: [
+        // ---- chapter 1, the volcano ----
+        // 1 hot stones
+        { h: 420, flag: [0, 800], it: [['p', 630, 84, 60], ['p', 365, 168, 60], ['k', 100, 252, 60], ['p', 365, 336, 60]] },
+        // 2 fire jets: through the tunnel between their bursts, then back over its roof
+        { h: 420, flag: [600, 150], it: [['p', 250, 84, 290], ['p', 310, 160, 300], ['fj', 480, 84, 58, 1, 2.4, 0.4], ['fj', 410, 84, 58, 1, 2.4, 0.4, 0.33], ['fj', 340, 84, 58, 1, 2.4, 0.4, 0.66], ['k', 170, 244, 60], ['p', 20, 328, 60]] },
+        // 3 the lava tide
+        { h: 420, flag: [130, 150], it: [['lt', 300, 500, 30, 230, 8], ['p', 380, 84, 60], ['p', 560, 168, 60], ['p', 700, 252, 60], ['k', 480, 336, 60]] },
+        // 4 the crumbling bridge
+        { h: 420, flag: [200, 150], it: [['l', 560, 20, 240, 30], ['k', 450, 84, 60], ['k', 700, 168, 60], ['fj', 792, 296, 290, 2, 2.4, 0.55], ['k', 440, 252, 60], ['k', 180, 336, 60]] },
+        // 5 geysers: a bounce pad in the lava, then the hot air
+        { h: 520, flag: [0, 150], it: [['lt', 250, 550, 20, 150, 4.8], ['b', 270, 60, 50], ['fj', 420, 170, 200, 1, 2.4, 0.5], ['p', 480, 250, 60], ['wind', 570, 270, 110, 200, 0, 2600], ['p', 420, 460, 60]] },
+        // 6 the crater
+        { h: 420, flag: [180, 150], it: [['lt', 480, 320, 20, 160, 6], ['k', 480, 84, 60], ['p', 680, 168, 60], ['fj', 792, 222, 250, 2, 3, 0.5], ['p', 480, 252, 60], ['k', 280, 336, 60]] },
+        // ---- chapter 2, the fire cave ----
+        // 7 ember stones
+        { h: 420, flag: [420, 380], it: [['bl', 250, 84, 64, 3, 0.5, 0], ['bl', 50, 168, 64, 3, 0.5, 0.75], ['bl', 250, 252, 64, 3, 0.5, 0.5], ['bl', 500, 336, 64, 3, 0.5, 0.25]] },
+        // 8 the fire wheel
+        { h: 504, flag: [620, 150], it: [['l', 0, 20, 500, 30], ['o', 380, 200, 120, 60, 4.8, 0], ['o', 380, 200, 120, 60, 4.8, 0.5], ['fj', 380, 44, 130, 1, 2.4, 0.5], ['fj', 8, 352, 300, 0, 2.4, 0.5, 0.5], ['k', 120, 340, 60], ['p', 300, 420, 60]] },
+        // 9 the forge
+        { h: 420, flag: [520, 150], it: [['c', 180, 84, 280, -170], ['fj', 390, 84, 110, 1, 2, 0.5], ['fj', 280, 84, 110, 1, 2, 0.5, 0.5], ['p', 50, 168, 60], ['c', 200, 252, 240, 170], ['fj', 290, 252, 110, 1, 2, 0.5, 0.25], ['fj', 370, 252, 110, 1, 2, 0.5, 0.75], ['k', 540, 336, 60]] },
+        // 10 the chain bridge
+        { h: 420, flag: [650, 150], it: [['lt', 0, 560, 20, 130, 3.2, 0.5], ['sw', 470, 240, 170, 60, 0.8, 3.2], ['p', 150, 200, 60], ['sw', 400, 420, 170, 60, 0.8, 3.2, 0.5], ['k', 650, 336, 60]] },
+        // 11 embers and ash
+        { h: 504, flag: [420, 150], it: [['bl', 220, 84, 60, 2.4, 0.5], ['k', 40, 168, 60], ['bl', 220, 252, 60, 2.4, 0.5, 0.5], ['p', 420, 336, 200], ['s', 520, 349, 62, 3, 2], ['bl', 720, 420, 60, 2.4, 0.5, 0.25]] },
+        // 12 the furnace
+        { h: 588, flag: [480, 150], it: [['l', 0, 20, 440, 30], ['p', 300, 84, 60], ['k', 120, 168, 60], ['o', 200, 370, 100, 60, 4.8, 0], ['o', 200, 370, 100, 60, 4.8, 0.5], ['fj', 8, 500, 230, 0, 2.4, 0.5], ['p', 420, 504, 60]] },
+        // ---- chapter 3, the crystal cave: slippery glass ----
+        // 13 glass steps
+        { h: 420, flag: [560, 240], it: [['i', 300, 84, 90], ['i', 20, 168, 90], ['i', 300, 252, 80], ['i', 570, 336, 80]] },
+        // 14 falling shards
+        { h: 420, flag: [330, 150], it: [['p', 610, 84, 60], ['ic', 640, 230, 140, 1.8, 0], ['bl', 740, 168, 60, 3.6, 0.5], ['ic', 770, 320, 140, 1.8, 0.5], ['p', 520, 252, 60], ['ic', 550, 400, 140, 1.8, 0.25], ['k', 280, 336, 60], ['ic', 310, 480, 130, 1.8, 0.75]] },
+        // 15 light beams
+        { h: 420, flag: [80, 150], it: [['i', 300, 84, 200], ['lz', 400, 84, 120, 1, 2, 0.5], ['i', 600, 168, 100], ['i', 330, 252, 140], ['lz', 290, 316, 220, 0, 2, 0.5, 0.5], ['p', 140, 336, 60]] },
+        // 16 the crystal lifts
+        { h: 420, flag: [330, 150], it: [['m', 540, 84, 70, 170, 0, 3], ['k', 730, 168, 60], ['m', 400, 252, 70, 190, 0, 3, 0.5], ['bl', 210, 336, 70, 3, 0.65]] },
+        // 17 the hall of spikes
+        { h: 420, flag: [0, 150], it: [['i', 220, 84, 360], ['sp', 270, 84, 90, 2.4, 0.5], ['sp', 420, 84, 90, 2.4, 0.5, 0.5], ['ic', 390, 230, 140, 2.4, 0.25], ['ic', 545, 230, 140, 2.4, 0.75], ['p', 690, 168, 56], ['k', 440, 252, 60], ['i', 180, 336, 80]] },
+        // 18 the crystal heart
+        { h: 554, flag: [440, 150], it: [['bl', 670, 84, 60, 3, 0.5], ['i', 480, 168, 120], ['z', 490, 184, 50, 0, 1.5], ['b', 380, 196, 50], ['lz', 150, 330, 270, 0, 3, 0.5], ['k', 180, 400, 60], ['p', 20, 470, 60]] },
+        // ---- chapter 4, the storm ----
+        // 19 the gale
+        { h: 420, flag: [200, 400], it: [['wind', 0, 30, 800, 180, -135, 0], ['p', 650, 84, 60], ['p', 430, 168, 60], ['wind', 0, 210, 800, 180, 135, 0], ['p', 280, 252, 60], ['p', 470, 336, 60]] },
+        // 20 thunder clouds
+        { h: 420, flag: [640, 150], it: [['v', 460, 84, 70], ['lz', 380, 60, 300, 1, 2.4, 0.4], ['v', 250, 168, 70], ['v', 60, 252, 70], ['lz', 200, 220, 200, 1, 2.4, 0.4, 0.5], ['v', 250, 336, 70]] },
+        // 21 the eye of the storm
+        { h: 504, flag: [450, 150], it: [['p', 680, 84, 60], ['wind', 660, 104, 140, 300, 0, 2600], ['z', 690, 210, 80, 0, 1.6], ['lz', 652, 352, 146, 0, 2.4, 0.5], ['k', 500, 400, 60]] },
+        // 22 swings in the wind
+        { h: 420, flag: [260, 150], it: [['wind', 430, 30, 370, 360, -110, 0], ['sw', 560, 250, 170, 60, 0.8, 3.2], ['k', 730, 168, 60], ['sw', 500, 420, 170, 60, 0.8, 3.2, 0.5], ['p', 180, 336, 60]] },
+        // 23 doors in the dark
+        { h: 420, flag: [20, 150], it: [['v', 280, 84, 60], ['p', 450, 168, 90], ['tp', 505, 168, 745, 252], ['p', 710, 252, 70], ['z', 640, 330, 0, 50, 1.5], ['bl', 500, 336, 60, 2.4, 0.5]] },
+        // 24 the thunderhead
+        { h: 504, flag: [330, 150], it: [['v', 560, 84, 70], ['m', 660, 168, 60, 80, 0, 2.4], ['v', 480, 252, 70], ['lz', 430, 230, 250, 1, 2.4, 0.4], ['sw', 260, 470, 150, 60, 0.8, 3.2], ['k', 0, 420, 60]] },
+        // ---- chapter 5, the dragon's nest ----
+        // 25 gold steps
+        { h: 588, flag: [150, 400], it: [['p', 655, 84, 50], ['p', 400, 168, 50], ['k', 155, 252, 50], ['p', 400, 336, 50], ['k', 645, 420, 50], ['p', 400, 504, 50]] },
+        // 26 the dragon's breath: the flames from the left and from the right take turns
+        { h: 588, flag: [180, 150], it: [['p', 430, 84, 60], ['fj', 8, 106, 490, 0, 3, 0.4], ['p', 620, 168, 60], ['fj', 792, 190, 180, 2, 3, 0.4, 0.5], ['p', 430, 252, 60], ['fj', 8, 274, 490, 0, 3, 0.4], ['p', 620, 336, 60], ['fj', 792, 358, 180, 2, 3, 0.4, 0.5], ['p', 430, 420, 60], ['fj', 8, 442, 490, 0, 3, 0.4], ['p', 620, 504, 60], ['fj', 792, 526, 180, 2, 3, 0.4, 0.5]] },
+        // 27 the ember ladder
+        { h: 588, flag: [380, 150], it: [['bl', 610, 84, 60, 2.4, 0.5], ['k', 730, 168, 60], ['bl', 540, 252, 60, 2.4, 0.5, 0.5], ['z', 475, 300, 0, 70, 1.6], ['k', 350, 336, 60], ['bl', 520, 420, 60, 2.4, 0.5], ['k', 720, 504, 60]] },
+        // 28 the lava lake: up before it comes
+        { h: 588, flag: [520, 150], it: [['lt', 0, 480, 20, 330, 10], ['p', 380, 84, 60], ['m', 130, 168, 60, 150, 0, 2.5], ['k', 400, 252, 60], ['p', 190, 336, 60], ['bl', 370, 420, 60, 2.5, 0.5], ['p', 170, 504, 60]] },
+        // 29 the wheel of fire
+        { h: 672, flag: [330, 150], it: [['l', 440, 20, 360, 30], ['o', 590, 230, 130, 60, 5, 0], ['o', 590, 230, 130, 60, 5, 0.5], ['fj', 590, 230, 118, 2, 2.5, 0.4], ['p', 380, 400, 60], ['k', 200, 484, 60], ['bl', 380, 568, 60, 2.5, 0.5]] },
+        // 30 the dragon
+        { h: 756, flag: [560, 150], it: [['k', 380, 84, 60], ['bl', 180, 168, 60, 3, 0.5], ['p', 20, 252, 60], ['b', 170, 280, 50], ['fj', 8, 392, 330, 0, 3, 0.5], ['p', 380, 470, 60], ['m', 520, 554, 60, 160, 0, 3], ['k', 740, 638, 60], ['z', 480, 772, 60, 0, 1.5]] }
       ]
     }
   };
   var NAME = { en: 'Obby Tower', zh: '障碍塔', py: 'zhàng\'ài tǎ', ms: 'Menara Halangan' };
   var TOWER_NAME = {
     easy: { en: 'Easy Tower', zh: '简单塔', py: 'jiǎndān tǎ', ms: 'Menara Mudah' },
-    hard: { en: 'Hard Tower', zh: '困难塔', py: 'kùnnan tǎ', ms: 'Menara Sukar' }
+    hard: { en: 'Hard Tower', zh: '困难塔', py: 'kùnnan tǎ', ms: 'Menara Sukar' },
+    dragon: { en: 'Dragon Tower', zh: '龙塔', py: 'lóng tǎ', ms: 'Menara Naga' }
   };
-  var MEDALS = { easy: [90, 150, 240], hard: [150, 240, 360] };   // seconds for gold, silver, bronze
-  var SOLID = { p: 1, f: 1, m: 1, o: 1, sw: 1, v: 1, b: 1, c: 1, i: 1 };
+  var TOWER_SHORT = { easy: 'Easy', hard: 'Hard', dragon: '🐉 Dragon' };       // on the small buttons that pick a tower
+  var TOWER_MARK = { easy: '🔥', hard: '🔥🔥', dragon: '🔥🔥🔥' };              // how hard a tower is, on everything that picks one
+  function towerId(v) { return TOWER_IDS.indexOf(v) >= 0 ? v : 'easy'; }
+  var MEDALS = { easy: [90, 150, 240], hard: [180, 300, 450], dragon: [360, 600, 900] };   // the first 12 stages: seconds for gold, silver, bronze
+  var SOLID = { p: 1, f: 1, m: 1, o: 1, sw: 1, v: 1, b: 1, c: 1, i: 1, k: 1, bl: 1 };
   // How a chapter looks: the tower wall, the ring where a stage begins, the glass of the windows, six platform colours
-  // and the colours of the sky at the top of the chapter. e = Easy tower (and the endless tower), h = Hard tower.
+  // and the colours of the sky at the top of the chapter. e = Easy tower (and the endless tower), h = Hard tower,
+  // d = Dragon tower (fire: its stones glow at the seams).
   var LOOKS = {
+    d0: { kind: 'ash', fire: 1, wall: '#5E4B50', trim: '#E8572A', glass: '#FF8A3D', sky: ['#4A1B3B', '#F2703A'], cols: ['#E8936B', '#D9A066', '#C97F5E', '#E0B07A', '#D98C73', '#C9A27E'] },
+    d1: { kind: 'magma', fire: 1, wall: '#4B2F36', trim: '#FF8A3D', glass: '#FFB84D', sky: ['#2B0F1F', '#B8391F'], cols: ['#FF9A4D', '#F2784B', '#FFB84D', '#E8663D', '#FFA366', '#F28C38'] },
+    d2: { kind: 'crystal', fire: 1, wall: '#3F3560', trim: '#B07CFF', glass: '#C9A0FF', sky: ['#160E38', '#7A3FA8'], cols: ['#B79CFF', '#8FD3FF', '#E0A3FF', '#9FB8FF', '#C9A0FF', '#7FD6E8'] },
+    d3: { kind: 'storm', fire: 1, wall: '#3C4456', trim: '#7FD6E8', glass: '#FFE680', sky: ['#0E111C', '#3F4C6B'], cols: ['#8FA8C9', '#A3B8D9', '#7F9AC0', '#B5C4E0', '#93A9CC', '#A9BCDC'] },
+    d4: { kind: 'nest', fire: 1, wall: '#402B31', trim: '#FFD23F', glass: '#FF6A3D', sky: ['#16080F', '#8A1F2B'], cols: ['#FFD23F', '#F2B94B', '#FFC94D', '#E8A93A', '#FFDB66', '#F2C14E'] },
     e0: { kind: 'brick', wall: '#EADFC8', trim: '#58C06B', glass: '#3F6FA8', sky: ['#3F9BEA', '#A8DCFF'], cols: ['#7BD389', '#5AC8FA', '#FFB454', '#B79CFF', '#FF8FB8', '#5ED6C4'] },
     e1: { kind: 'brick', wall: '#EADFC8', trim: '#58C06B', glass: '#3F6FA8', sky: ['#27489A', '#86B9F2'], cols: ['#FFD66B', '#FF8A65', '#8FD3FF', '#C5E86C', '#F7A8E0', '#FFC933'] },
     e2: { kind: 'ice', wall: '#DCEFF8', trim: '#6CC6EE', glass: '#5B8FD0', sky: ['#4E9FDC', '#E6F7FF'], cols: ['#9BD8F5', '#B5F0E6', '#8FC4F5', '#C9D8FF', '#A5E8FF', '#9FE0C8'] },
@@ -218,7 +316,13 @@
   // ---------- building a tower from its stage lists (world: x right, y down, the ground is y = 0) ----------
   function make(it, base) {
     switch (it[0]) {
-      case 'p': case 'v': case 'b': case 'i': return { k: it[0], x: it[1], y: base - it[2], w: it[3] };
+      case 'p': case 'v': case 'b': case 'i': case 'k': return { k: it[0], x: it[1], y: base - it[2], w: it[3] };
+      case 'sp': case 'bl': return { k: it[0], x: it[1], y: base - it[2], w: it[3], per: it[4], on: it[5], ph: it[6] || 0 };
+      case 'fj':       // (x0, y0) to (x1, y1): the line the flame burns along; ux, uy: the way it blows
+        return { k: 'fj', x: it[1], y: base - it[2], len: it[3], dir: it[4], per: it[5], on: it[6], ph: it[7] || 0, ux: it[4] === 0 ? 1 : it[4] === 2 ? -1 : 0, uy: it[4] === 1 ? -1 : it[4] === 3 ? 1 : 0,
+          x0: it[4] === 2 ? it[1] - it[3] : it[1], x1: it[4] === 0 ? it[1] + it[3] : it[1], y0: it[4] === 1 ? base - it[2] - it[3] : base - it[2], y1: it[4] === 3 ? base - it[2] + it[3] : base - it[2] };
+      case 'lt':       // y = the surface at its lowest, bot = the bottom of the pool (the floor of the stage)
+        return { k: 'lt', x: it[1], y: base - it[3], w: it[2], amp: it[4] - it[3], bot: base, per: it[5], ph: it[6] || 0 };
       case 'ic': return { k: 'ic', x: it[1], y: base - it[2], drop: it[3], per: it[4], ph: it[5] || 0, r: 8 };
       case 'tp': return { k: 'tp', x: it[1], y: base - it[2], tx: it[3], ty: base - it[4] };
       case 'lz': return it[4] ? { k: 'lz', x: it[1], y: base - it[2] - it[3], w: 0, h: it[3], per: it[5], on: it[6], ph: it[7] || 0 } : { k: 'lz', x: it[1], y: base - it[2], w: it[3], h: 0, per: it[5], on: it[6], ph: it[7] || 0 };
@@ -236,7 +340,7 @@
     return null;
   }
   function build(id, def) {
-    var tw = { id: id, def: def, n: def.stages.length, ents: [], stages: [], vd: def.vanish, solid: !!def.solid, top: 0, height: 0, per: def.per || CHAP };
+    var tw = { id: id, def: def, n: def.stages.length, ents: [], stages: [], vd: def.vanish, kd: def.crumble || 0.5, solid: !!def.solid, top: 0, height: 0, per: def.per || CHAP };
     var base = 0, i, j, sd, stg, e, ch, tp = 0;
     function add(e) { e.i = tw.ents.length; e.st = stg.i; tw.ents.push(e); stg.list.push(e.i); }
     for (i = 0; i <= tw.n; i++) {
@@ -367,25 +471,33 @@
       a = T / e.per + e.ph; a -= Math.floor(a); o.x = e.x;
       if (a < 0.5) o.y = e.y + 16; else { a = (a - 0.5) * e.per; a = ICG * a * a; o.y = a > e.drop ? 1e7 : e.y + 16 + a; }
     }
+    else if (k === 'lt') { o.x = e.x; o.y = e.y - e.amp * (0.5 - 0.5 * Math.cos(TAU * (T / e.per + e.ph))); }      // the surface of a lava pool
     else { o.x = e.x; o.y = e.y; }
     return o;
   }
   function newState() { return { x: 0, y: 0, vx: 0, vy: 0, on: -1, coy: 0, buf: 0, air: 0, held: false, f: 1, cp: 0, T: 0, van: {}, ev: 0, hit: -1, tpc: 0 }; }
+  // lasers, spikes, fire jets and ember stones: on for the first part `on` of their seconds
   function laserOn(e, T) { var u = T / e.per + e.ph; return u - Math.floor(u) < e.on; }
   // puts the player on the flag of stage s.cp
   function spawn(tw, s) {
     var F = tw.ents[tw.stages[s.cp].fi];
     s.x = clamp(F.px - 26, F.x + 12, F.x + F.w - 12); s.y = F.y; s.vx = s.vy = 0; s.on = F.i; s.coy = s.buf = 0; s.air = 0; s.van = {}; s.tpc = 0;
   }
-  // a cloud is away from `vd` seconds after it was first stood on until it comes back
+  // a cloud is away from `vd` seconds after it was first stood on until it comes back (a slab that crumbles: `kd`)
   function gone(tw, s, i, T) {
-    var t0 = s.van[i], d;
+    var t0 = s.van[i], d, k;
     if (t0 === undefined) return false;
-    d = T - t0;
-    if (d < tw.vd) return false;
-    if (d < tw.vd + VBACK) return true;
+    d = T - t0; k = tw.ents[i].k === 'k';
+    if (d < (k ? tw.kd : tw.vd)) return false;
+    if (d < (k ? tw.kd + KBACK : tw.vd + VBACK)) return true;
     delete s.van[i];
     return false;
+  }
+  // false while a platform is not there: a cloud or a slab that is away (for this player), an ember stone that is out (for everybody)
+  function there(tw, s, e, T) {
+    if (e.k === 'v' || e.k === 'k') return !gone(tw, s, e.i, T);
+    if (e.k === 'bl') return laserOn(e, T);
+    return true;
   }
   function segDist(px, py, ax, ay, bx, by) {
     var dx = bx - ax, dy = by - ay, l = dx * dx + dy * dy, u = l ? clamp(((px - ax) * dx + (py - ay) * dy) / l, 0, 1) : 0;
@@ -427,7 +539,7 @@
         if (e.k === 'wind' && s.x > e.x && s.x < e.x + e.w && s.y - 20 > e.y && s.y - 20 < e.y + e.h) { wx += e.fx; wy += e.fy; }
       }
     }
-    if (s.on >= 0 && ents[s.on].k === 'v' && gone(tw, s, s.on, T1)) { s.on = -1; s.coy = 0; }
+    if (s.on >= 0 && !there(tw, s, ents[s.on], T1)) { s.on = -1; s.coy = 0; }
     // jump: from the ground, a moment after leaving it, or once more in the air
     if (s.buf > 0) {
       if (s.on >= 0 || s.coy > 0) { s.vy = -JUMP; s.on = -1; s.coy = 0; s.buf = 0; s.ev |= EV_JUMP; }
@@ -451,7 +563,7 @@
           list = tw.stages[si].list;
           for (i = 0; i < list.length; i++) {
             e = ents[list[i]];
-            if (!SOLID[e.k] || e.k === 'v') continue;
+            if (!SOLID[e.k] || e.k === 'v' || ((e.k === 'k' || e.k === 'bl') && !there(tw, s, e, T1))) continue;
             pos(e, T1, PB);
             if (s.x <= PB.x + 4 || s.x >= PB.x + e.w - 4 || s.y - HEAD >= PB.y + THICK || s.y - HEAD <= PB.y - 2) continue;
             if (py0 - HEAD >= PB.y + THICK - 16) s.y = PB.y + THICK + HEAD;
@@ -471,7 +583,7 @@
             if (s.y < PB.y || s.x < PB.x - o.ledge || s.x > PB.x + e.w + o.ledge) continue;
             pos(e, T0, PA);
             if (py0 > PA.y + 6) continue;
-            if (e.k === 'v' && gone(tw, s, e.i, T1)) continue;
+            if (!there(tw, s, e, T1)) continue;
             if (best < 0 || PB.y < bestY) { best = e.i; bestY = PB.y; }
           }
         }
@@ -479,7 +591,7 @@
           e = ents[best];
           s.y = bestY; s.vy = 0; s.on = best; s.air = 0; s.coy = 0; s.ev |= EV_LAND;
           if (e.k === 'b') { s.vy = -BOUNCE; s.on = -1; s.ev |= EV_BOUNCE; s.hit = best; }
-          else if (e.k === 'v' && s.van[best] === undefined) s.van[best] = T1;
+          else if ((e.k === 'v' || e.k === 'k') && s.van[best] === undefined) s.van[best] = T1;
         }
       }
     }
@@ -503,6 +615,13 @@
         } else if (e.k === 'lz') {
           d = 3 + hz;
           if (s.x + 7 > e.x - d && s.x - 7 < e.x + e.w + d && s.y > e.y - d && s.y - 34 < e.y + e.h + d && laserOn(e, T1)) { s.ev |= EV_DIE; break; }
+        } else if (e.k === 'sp') {      // spikes: they hurt whoever has the feet in them while they are out
+          if (s.x + 7 > e.x + 4 - hz && s.x - 7 < e.x + e.w - 4 + hz && s.y > e.y - 12 - hz && s.y - 34 < e.y + 2 && laserOn(e, T1)) { s.ev |= EV_DIE; break; }
+        } else if (e.k === 'fj') {      // a fire jet: the whole flame
+          d = 6 + hz;
+          if (s.x + 7 > e.x0 - d && s.x - 7 < e.x1 + d && s.y > e.y0 - d && s.y - 34 < e.y1 + d && laserOn(e, T1)) { s.ev |= EV_DIE; break; }
+        } else if (e.k === 'lt') {      // a lava pool that rises and sinks: everything under its surface
+          if (s.x + 7 > e.x + 3 - hz && s.x - 7 < e.x + e.w - 3 + hz && s.y < e.bot + 4) { pos(e, T1, PB); if (s.y > PB.y + 5 - hz) { s.ev |= EV_DIE; break; } }
         } else if (e.k === 'tp') {
           if (s.tpc <= 0 && Math.abs(s.x - e.x) < 16 && s.y <= e.y + 4 && s.y > e.y - 52) {   // through the door
             s.x = e.tx; s.y = e.ty - 2; s.vx = 0; s.vy = 0; s.on = -1; s.coy = 0; s.air = 0; s.tpc = 0.6; s.ev |= EV_TP; s.hit = e.i;
@@ -569,7 +688,9 @@
     var e = tw.ents[ei];
     pos(e, s.T, PA);
     s.x = clamp(x, Math.max(14, PA.x + 10), Math.min(W - 14, PA.x + e.w - 10)); s.y = PA.y; s.vx = 0; s.vy = 0; s.on = ei; s.air = 0; s.coy = 0;
-    if (e.k === 'v' && s.van[ei] === undefined) s.van[ei] = s.T;
+    // (a slab that had crumbled under me holds again, as it does for the one who stands on it: its moment starts anew)
+    if (e.k === 'k' && gone(tw, s, ei, s.T)) delete s.van[ei];
+    if ((e.k === 'v' || e.k === 'k') && s.van[ei] === undefined) s.van[ei] = s.T;
     rp.firm = ROPE.FIRM; rp.ev = 2;           // and a moment to find my feet before any weight can drag me off again
   }
   // Before step(): the pull of the rope on my climber `s`. nbs = [{ o: neighbour { x, y, vx, vy, s, e (what they stand on) },
@@ -772,12 +893,33 @@
     g.fillStyle = fill; g.fill(); ol(g, 2);
   }
   function platSprite(e, stg) {
-    var k = e.k, kind = k === 'm' ? (e.dy ? 'mv' : 'mh') : k, w = e.w, col = stg.col, lk = LOOKS[stg.look].kind;
+    var k = e.k, kind = k === 'm' ? (e.dy ? 'mv' : 'mh') : k, w = e.w, col = stg.col, lk = LOOKS[stg.look].kind, fire = !!LOOKS[stg.look].fire, glass = lk === 'crystal';
     var rest = k === 'f' && e.flag > 0 && (e.flag % tw.per === 0 || e.flag === tw.n), space = k === 'p' && lk === 'space';
-    return spr(kind + '|' + w + '|' + (k === 'p' ? col + (tw.solid ? 's' : '') + (space ? 'x' : lk === 'ice' ? 'i' : '') : k === 'i' ? (tw.solid ? 's' : '') : rest ? 'r' : ''), w + 36, 56, function (g) {
+    return spr(kind + '|' + w + '|' + (k === 'p' ? col + (tw.solid ? 's' : '') + (space ? 'x' : lk === 'ice' ? 'i' : fire ? 'f' : '') : k === 'i' ? (tw.solid ? 's' : '') + (glass ? 'c' : '') : k === 'k' ? (fire ? 'f' : '') : rest ? 'r' : ''), w + 36, 56, function (g) {
       var i, n, list;
       g.translate(12, 16);
-      if (space) {
+      if (k === 'p' && fire) {
+        // Dragon tower: dark rock that glows at the seam, under a top in the colour of the chapter
+        block(g, w, col, '#4A3B45', '#33272F', 18);
+        g.strokeStyle = '#FF8A3D'; g.lineWidth = 2.5; g.beginPath(); g.moveTo(2.5, 8.5); g.lineTo(w - 2.5, 8.5); g.stroke();
+        g.strokeStyle = 'rgba(255,170,80,0.8)'; g.lineWidth = 1.8; g.beginPath();
+        for (i = 14; i < w - 8; i += 26) { g.moveTo(i, 9.5); g.lineTo(i + 4, 14); g.lineTo(i - 1, 19); }
+        g.stroke();
+        g.fillStyle = NAVY; g.fillRect(0, 21, w, 3.5);
+      } else if (k === 'k') {
+        // a slab that crumbles: pale stone full of cracks, pebbles coming off underneath
+        for (i = 12; i < w - 6; i += 22) { g.beginPath(); g.arc(i, 27 + (i * 7 % 5), 3, 0, TAU); g.fillStyle = fire ? '#6E5F68' : '#A89A8C'; g.fill(); ol(g, 2); }
+        block(g, w, fire ? '#B9AEB4' : '#E5DACB', fire ? '#6E5F68' : '#A89A8C', fire ? '#51444D' : '#85776B', 18);
+        g.strokeStyle = NAVY; g.lineWidth = 2; g.beginPath();
+        for (i = 12; i < w - 8; i += 20) { g.moveTo(i, 5); g.lineTo(i + 5, 11); g.lineTo(i + 1, 15); g.lineTo(i + 6, 22); }
+        g.stroke();
+        g.fillStyle = NAVY; g.fillRect(0, 21, w, 3.5);
+      } else if (k === 'bl') {
+        // an ember stone: it glows while it is there
+        block(g, w, '#FFD27A', '#F2703A', '#C44A2F', 18);
+        g.fillStyle = 'rgba(255,240,170,0.85)'; for (i = 10; i < w - 6; i += 16) { g.beginPath(); g.arc(i, 14, 2.6, 0, TAU); g.fill(); }
+        g.fillStyle = NAVY; g.fillRect(0, 21, w, 3.5);
+      } else if (space) {
         // space chapter: a metal deck with little lights
         block(g, w, '#E3E8F2', '#5B6785', '#3A445C', 18);
         g.fillStyle = 'rgba(255,255,255,0.18)'; g.fillRect(1.5, 6.5, w - 3, 4);
@@ -796,8 +938,8 @@
         for (i = 9; i < w - 5; i += 17) { g.beginPath(); g.arc(i, 5, 6.5, 0, Math.PI); g.fillStyle = lk === 'ice' ? '#FFFFFF' : col; g.fill(); ol(g, 2); }   // icing (snow in the ice chapter) over the edge
       } else if (k === 'i') {
         // ice: pale and glassy, with shine lines and little icicles underneath
-        for (i = 16; i < w - 8; i += 34) { poly(g, [i - 5, 22, i + 5, 22, i, 33]); g.fillStyle = '#CDEFFF'; g.fill(); ol(g, 2); }
-        block(g, w, '#F2FBFF', '#93D6F5', '#5FA9D6', 18);
+        for (i = 16; i < w - 8; i += 34) { poly(g, [i - 5, 22, i + 5, 22, i, 33]); g.fillStyle = glass ? '#D9C2FF' : '#CDEFFF'; g.fill(); ol(g, 2); }
+        block(g, w, glass ? '#F6EEFF' : '#F2FBFF', glass ? '#B79CFF' : '#93D6F5', glass ? '#8A6FD6' : '#5FA9D6', 18);       // (in the crystal cave: slippery glass)
         g.strokeStyle = 'rgba(255,255,255,0.85)'; g.lineWidth = 2.5; g.beginPath();
         for (i = 14; i < w - 12; i += 30) { g.moveTo(i, 19); g.lineTo(i + 9, 9); g.moveTo(i + 7, 19); g.lineTo(i + 11, 14.5); }
         g.stroke();
@@ -905,21 +1047,37 @@
       star(g, 2, -41, 8); g.fillStyle = '#fff'; g.fill(); ol(g, 2);
     });
   }
-  function cloudSprite(k) {
-    return spr('cloud' + k, 190, 80, function (g) {
+  function cloudSprite(k, dark) {     // dark: the smoke over the Dragon tower
+    return spr('cloud' + k + (dark ? 'd' : ''), 190, 80, function (g) {
       var L = [[[40, 50, 24], [72, 38, 30], [110, 44, 26], [140, 52, 20]], [[36, 52, 20], [62, 42, 26], [96, 34, 30], [130, 46, 24], [156, 54, 16]], [[50, 48, 26], [88, 42, 28], [124, 50, 22]]][k], i;
-      g.fillStyle = 'rgba(150,190,230,0.55)';
+      g.fillStyle = dark ? 'rgba(20,10,24,0.55)' : 'rgba(150,190,230,0.55)';
       for (i = 0; i < L.length; i++) { g.beginPath(); g.arc(L[i][0], L[i][1] + 6, L[i][2], 0, TAU); g.fill(); }
-      g.fillStyle = '#fff';
+      g.fillStyle = dark ? '#5A4458' : '#fff';
       for (i = 0; i < L.length; i++) { g.beginPath(); g.arc(L[i][0], L[i][1], L[i][2], 0, TAU); g.fill(); }
     });
   }
   // the land far below: two rows of hills and the little houses of the town
-  function farSprite(hard) {
-    return spr('far' + (hard ? 1 : 0), 800, 240, function (g) {
+  // far: 0 = the green land under the Easy tower, 1 = dusk under the Hard tower, 2 = the burnt land of the Dragon tower
+  function farSprite(far) {
+    var hard = far === 1;
+    return spr('far' + far, 800, 240, function (g) {
       var x, i, y, s, ROOF = ['#E0447F', '#F08A24', '#3B5BDB', '#37B24D', '#C92A2A', '#6C4BD8'];
       function h1(x) { return 74 + Math.sin(x * TAU / 400) * 20 + Math.sin(x * TAU / 160 + 1) * 9; }
       function h2(x) { return 122 + Math.sin(x * TAU / 800 * 3 + 2) * 16 + Math.sin(x * TAU / 200) * 7; }
+      if (far === 2) {
+        // dark hills, a volcano with a glowing top, rivers of lava and burnt trees
+        g.fillStyle = '#4A2638'; g.beginPath(); g.moveTo(0, 240); for (x = 0; x <= 800; x += 16) g.lineTo(x, h1(x)); g.lineTo(800, 240); g.closePath(); g.fill();
+        poly(g, [452, 120, 556, 14, 604, 14, 716, 120]); g.fillStyle = '#3A1E30'; g.fill();
+        poly(g, [552, 18, 558, 9, 602, 9, 608, 18]); g.fillStyle = '#FF8A3D'; g.fill();
+        g.strokeStyle = '#FF6A2B'; g.lineWidth = 4; g.lineCap = 'round'; g.lineJoin = 'round'; g.beginPath(); g.moveTo(580, 16); g.lineTo(573, 48); g.lineTo(586, 76); g.lineTo(570, 116); g.stroke();
+        g.fillStyle = '#2E1626'; g.beginPath(); g.moveTo(0, 240); for (x = 0; x <= 800; x += 16) g.lineTo(x, h2(x)); g.lineTo(800, 240); g.closePath(); g.fill();
+        g.strokeStyle = '#FF7A2E'; g.lineWidth = 3.5;
+        for (i = 0; i < 6; i++) { x = 40 + i * 135 + rnd(i + 3) * 60; y = h2(x) + 10; g.beginPath(); g.moveTo(x, y); g.quadraticCurveTo(x + 60 * (rnd(i) - 0.5), y + 40, x + 90 * (rnd(i + 7) - 0.5), y + 110); g.stroke(); }
+        g.strokeStyle = '#1C0E18'; g.lineWidth = 2.5;
+        for (i = 0; i < 16; i++) { x = rnd(i + 5) * 800; y = h2(x) + 10 + rnd(i + 60) * 60; g.beginPath(); g.moveTo(x, y); g.lineTo(x, y - 15); g.moveTo(x, y - 8); g.lineTo(x - 5, y - 13); g.moveTo(x, y - 6); g.lineTo(x + 5, y - 11); g.stroke(); }
+        g.fillStyle = 'rgba(255,120,60,0.13)'; g.fillRect(0, 0, 800, 240);
+        return;
+      }
       g.fillStyle = hard ? '#C08FC4' : '#B5E3C0'; g.beginPath(); g.moveTo(0, 240); for (x = 0; x <= 800; x += 16) g.lineTo(x, h1(x)); g.lineTo(800, 240); g.closePath(); g.fill();
       g.fillStyle = hard ? '#9A6DB5' : '#8ED6A0'; g.beginPath(); g.moveTo(0, 240); for (x = 0; x <= 800; x += 16) g.lineTo(x, h2(x)); g.lineTo(800, 240); g.closePath(); g.fill();
       for (i = 0; i < 26; i++) {      // trees
@@ -963,6 +1121,14 @@
             if (rnd(x * 0.37 + row * 9.1) > 0.72) { g.fillStyle = rnd(x + row) > 0.5 ? 'rgba(255,255,255,0.22)' : 'rgba(27,42,73,0.07)'; g.fillRect(x + 2, y + 2, 60, 26); }
             if (L.kind === 'ice' && rnd(x * 0.53 + row * 4.7) > 0.5) { g.fillStyle = 'rgba(255,255,255,0.75)'; rr(g, x + 3, y + 2, 58, 7, 3.5); g.fill(); }
             if (L.kind === 'cloud' && rnd(x * 0.61 + row * 2.9) > 0.78) { star(g, x + 32, y + 15, 7); g.fillStyle = 'rgba(242,185,75,0.6)'; g.fill(); }
+            if (L.fire && rnd(x * 0.47 + row * 6.3) > 0.7) {       // Dragon tower: glowing cracks, crystals, lightning marks, golden scales
+              g.strokeStyle = g.fillStyle = L.kind === 'crystal' ? 'rgba(200,160,255,0.7)' : L.kind === 'storm' ? 'rgba(160,220,240,0.45)' : L.kind === 'nest' ? 'rgba(255,210,63,0.6)' : 'rgba(255,140,60,0.7)';
+              g.lineCap = 'round'; g.lineJoin = 'round';
+              if (L.kind === 'crystal') { poly(g, [x + 32, y + 5, x + 39, y + 15, x + 32, y + 25, x + 25, y + 15]); g.fill(); }
+              else if (L.kind === 'nest') { g.lineWidth = 2.5; g.beginPath(); g.arc(x + 20, y + 6, 12, 0.2, Math.PI - 0.2); g.stroke(); g.beginPath(); g.arc(x + 44, y + 6, 12, 0.2, Math.PI - 0.2); g.stroke(); }
+              else if (L.kind === 'storm') { g.lineWidth = 2; g.beginPath(); g.moveTo(x + 40, y + 4); g.lineTo(x + 28, y + 16); g.lineTo(x + 36, y + 16); g.lineTo(x + 24, y + 27); g.stroke(); }
+              else { g.lineWidth = 2.5; g.beginPath(); g.moveTo(x + 8, y + 6); g.lineTo(x + 22, y + 13); g.lineTo(x + 30, y + 9); g.lineTo(x + 46, y + 22); g.stroke(); }
+            }
           }
         }
         g.strokeStyle = shade(base, -0.17); g.lineWidth = 2; g.beginPath(); row = 0;
@@ -1027,10 +1193,10 @@
       g.beginPath(); g.arc(70, 70, 16, 0, TAU); g.fillStyle = 'rgba(255,255,255,0.35)'; g.fill();
     });
   }
-  function moonSprite() {
-    return spr('moon', 100, 100, function (g) {
-      g.beginPath(); g.arc(50, 50, 36, 0, TAU); g.fillStyle = '#FFF6D8'; g.fill();
-      g.fillStyle = 'rgba(180,170,200,0.45)';
+  function moonSprite(red) {      // red: the moon over the Dragon tower
+    return spr('moon' + (red ? 1 : 0), 100, 100, function (g) {
+      g.beginPath(); g.arc(50, 50, 36, 0, TAU); g.fillStyle = red ? '#FFB59A' : '#FFF6D8'; g.fill();
+      g.fillStyle = red ? 'rgba(170,70,60,0.4)' : 'rgba(180,170,200,0.45)';
       g.beginPath(); g.arc(38, 40, 8, 0, TAU); g.arc(62, 58, 11, 0, TAU); g.arc(44, 68, 5, 0, TAU); g.fill();
     });
   }
@@ -1057,7 +1223,7 @@
   }
 
   // ---------- names (labels only, always in three languages) ----------
-  var MEDALS_FULL = { easy: [300, 480, 720], hard: [540, 840, 1260] };   // the whole tower: seconds for gold, silver, bronze
+  var MEDALS_FULL = { easy: [300, 480, 720], hard: [840, 1320, 1980], dragon: [1260, 1980, 3000] };   // the whole tower: seconds for gold, silver, bronze
   var MODE_NAME = {
     climb: { en: 'Climb', zh: '爬塔', py: 'pá tǎ', ms: 'Panjat menara' },
     race: { en: 'Race', zh: '比赛', py: 'bǐsài', ms: 'Perlumbaan' },
@@ -1073,6 +1239,23 @@
     { icon: '☁️', en: 'Clouds', zh: '云朵', py: 'yúnduǒ', ms: 'Awan' },
     { icon: '🚀', en: 'Space', zh: '太空', py: 'tàikōng', ms: 'Angkasa' }
   ];
+  // a tower with chapters of its own
+  var CHAPS_OF = {
+    dragon: [
+      { icon: '🌋', en: 'Volcano', zh: '火山', py: 'huǒshān', ms: 'Gunung Berapi' },
+      { icon: '🔥', en: 'Fire Cave', zh: '火焰洞', py: 'huǒyàn dòng', ms: 'Gua Api' },
+      { icon: '💎', en: 'Crystal Cave', zh: '水晶洞', py: 'shuǐjīng dòng', ms: 'Gua Kristal' },
+      { icon: '⛈️', en: 'Storm', zh: '暴风雨', py: 'bàofēngyǔ', ms: 'Ribut' },
+      { icon: '🐉', en: 'Dragon\'s Nest', zh: '龙巢', py: 'lóng cháo', ms: 'Sarang Naga' }
+    ]
+  };
+  function chap(id, k) { var l = CHAPS_OF[id] || CHAPS; return l[k % l.length]; }
+  // Rope Team: the two ropes. col = the rope and the name tags, hot = the rope when it is tight, soft = behind the team in a list
+  var TEAMS = [
+    { ico: '🔴', col: '#F0554A', hot: '#FFD23F', soft: '#FFDCD6', en: 'Red Rope', zh: '红绳队', py: 'hóng shéng duì', ms: 'Tali Merah' },
+    { ico: '🔵', col: '#3F8FE8', hot: '#FFFFFF', soft: '#D8E9FF', en: 'Blue Rope', zh: '蓝绳队', py: 'lán shéng duì', ms: 'Tali Biru' }
+  ];
+  var SIZE_NAME = { en: 'Rope size', zh: '绳子人数', py: 'shéngzi rénshù', ms: 'Saiz tali' };
   var HEARTS = 5;                  // falls allowed in one climb of the endless tower (a rest platform gives one back)
   var GHOST_DT = 150;              // the recording of a race: one point every 150 ms, three letters each
   var LOOK_MS = 5000;              // looking at somebody else ends by itself after this long without a touch
@@ -1085,8 +1268,8 @@
   var raf = 0, lastT = 0, tOff = 0;
   var mode = null;                 // null = closed, 'lobby', 'run', 'done'
   var tab = 'climb';               // the way to play shown at the entrance: 'climb', 'race', 'lava', 'endless', 'rope'
-  var sel = { rt: 'easy', rc: 0, lt: 'easy', pt: 'easy', pc: 0 };    // what is picked for a race (tower, chapter), for the lava (tower) and for a rope team (tower, chapter)
-  var ROPE_COL = '#E9B45C', ROPE_HOT = '#FF6A3D';     // the rope, and the rope when it is tight
+  var sel = { rt: 'easy', rc: 0, lt: 'easy', pt: 'easy', pc: 0, ps: 2 };    // what is picked for a race (tower, chapter), for the lava (tower) and for a rope team (tower, chapter, climbers on a rope)
+  var ROPE_COL = '#E9B45C', ROPE_HOT = '#FF6A3D';     // the rope as it is drawn right now, and when it is tight (set from the team, see drawRopes)
   var rkeys = { hold: false, pull: false, hp: null, pp: null };     // the two rope buttons: pressed, and by which finger
   var NBS = [];                    // my neighbours on the rope this frame (see ropeNbs)
   var info = null;                 // what the server told us: { towers, me, lb, who, pt, day, caps }
@@ -1140,6 +1323,7 @@
     '.obby-pill[hidden]{display:none}',
     '.obby-lobby{position:absolute;left:0;right:0;top:68px;bottom:0;display:grid;grid-template-columns:repeat(2,minmax(0,540px));grid-template-rows:fit-content(100%);gap:12px;padding:4px 12px 14px;align-content:center;justify-content:center}',
     '.obby-lobby[hidden]{display:none}',
+    '.obby-lobby.three{grid-template-columns:repeat(3,minmax(0,410px))}',
     '.obby-card{min-width:0;min-height:0;overflow-y:auto;touch-action:pan-y;background:#FFF3D6;border:4px solid #1B2A49;border-radius:26px;padding:12px 14px;display:flex;flex-direction:column;gap:8px;box-shadow:0 7px 0 rgba(27,42,73,.25)}',
     '.obby-wait{grid-column:1 / 3;justify-self:center;font-size:22px;font-weight:600;text-align:center}',
     '.obby-ch{display:flex;align-items:center;gap:10px}',
@@ -1147,6 +1331,7 @@
     '.obby-emo{flex:none;width:54px;height:54px;border-radius:16px;border:3px solid #1B2A49;background:#fff;font-size:32px;line-height:48px;text-align:center}',
     '.obby-nm{font-size:16px;font-weight:600;line-height:1.25}',
     '.obby-nm b{font-size:22px;display:block}',
+    '.obby-mark{flex:none;margin-left:auto;align-self:flex-start;font-size:15px;line-height:1.5;background:#fff;border:2px solid #1B2A49;border-radius:999px;padding:0 7px;white-space:nowrap}',
     '.obby-sub{font-size:15px;font-weight:600;line-height:1.25}',
     '.obby-sub b{font-size:18px}',
     '.obby-prog{display:flex;align-items:center;gap:8px;font-size:18px;font-weight:700}',
@@ -1162,7 +1347,26 @@
     '.obby-chap.on{background:#FFD66B}',
     '.obby-chap.on:disabled{opacity:1}',
     '.obby-seg{display:flex;gap:6px}',
-    '.obby-seg .btn{flex:1 1 0;min-width:0;height:50px;padding:0 6px;font-size:18px;border-width:3px;white-space:nowrap}',
+    '.obby-seg .btn{flex:1 1 0;min-width:0;height:50px;padding:0 4px;font-size:17px;border-width:3px;white-space:nowrap;display:flex;flex-direction:column;align-items:center;justify-content:center;line-height:1.1;gap:1px}',
+    '.obby-seg .btn i{font-style:normal;font-size:11px;line-height:1}',
+    // Rope Team: the rope size, and the two ropes with their places
+    '.obby-size{display:flex;align-items:center;gap:8px}',
+    '.obby-sl{flex:1;min-width:0;font-size:14px;font-weight:600;line-height:1.2}',
+    '.obby-size .obby-seg{flex:none;width:186px}',
+    '.obby-size .obby-seg .btn{font-size:21px}',
+    '.obby-team{border:3px solid #1B2A49;border-radius:16px;padding:4px 8px 6px;display:flex;flex-direction:column;gap:3px;min-width:0}',
+    '.obby-tn{font-size:14px;font-weight:600;line-height:1.25;display:flex;gap:6px;align-items:baseline;white-space:nowrap;overflow:hidden}',
+    '.obby-tn span.n{flex:1;min-width:0;white-space:normal}',
+    '.obby-tn b{font-size:16px}',
+    '.obby-tn em{font-style:normal;font-weight:700;font-size:16px;margin-left:auto}',
+    '.obby-tr{display:flex;gap:8px;align-items:center}',
+    '.obby-slots{flex:1;min-width:0;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:3px 4px}',
+    '.obby-slots span{height:23px;border:2px dashed rgba(27,42,73,.55);border-radius:999px;font-size:13.5px;font-weight:600;line-height:19px;display:flex;align-items:center;justify-content:center;gap:4px;overflow:hidden;white-space:nowrap;background:rgba(255,255,255,.55);padding:0 6px;color:rgba(27,42,73,.6)}',
+    '.obby-slots span.in{border:2px solid #1B2A49;background:#fff;justify-content:flex-start;color:#1B2A49}',
+    '.obby-slots span.in.me{background:#FFD66B}',
+    '.obby-slots span u{text-decoration:none;min-width:0;overflow:hidden;text-overflow:ellipsis}',
+    '.obby-slots i{flex:none;width:13px;height:13px;border-radius:4px;border:2px solid #1B2A49}',
+    '.obby-team .btn{flex:none;width:112px;height:50px;padding:0 4px;font-size:17px;border-width:3px;white-space:nowrap}',
     '.obby-seg .btn.on{background:#FFD66B}',
     '.obby-seg .btn.on:disabled{opacity:1}',
     '.obby-row{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:16px;font-weight:600;flex-wrap:wrap}',
@@ -1187,6 +1391,8 @@
     '.obby-now span{display:flex;align-items:center;gap:5px;background:#fff;border:2px solid #1B2A49;border-radius:999px;padding:1px 10px 1px 4px;white-space:nowrap}',
     '.obby-now i{width:18px;height:18px;border-radius:6px;border:2px solid #1B2A49}',
     '.obby-btns{display:flex;gap:8px;margin-top:auto}',
+    // on a small screen a tower card may be taller than its place: its buttons stay in sight, the rest scrolls under them
+    '.obby-lobby.three .obby-card>.obby-btns{position:sticky;bottom:-9px;background:#FFF3D6;padding:4px 0 2px;z-index:1}',
     '.obby-btns .btn{flex:1 1 0;min-width:0;padding:0 8px;font-size:19px;white-space:nowrap}',
     '.obby-keys{position:absolute;left:0;right:0;bottom:0;height:0;pointer-events:none}',
     '.obby-key{position:absolute;bottom:16px;width:86px;height:86px;border-radius:50%;border:4px solid #1B2A49;background:rgba(255,255,255,.7);display:flex;align-items:center;justify-content:center}',
@@ -1238,6 +1444,8 @@
     '.obby-dl li b{flex:none;min-width:30px;text-align:left}',
     '.obby-dl li span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left}',
     '.obby-dl li em{font-style:normal;font-weight:700;white-space:nowrap}',
+    '.obby-dl li.th{font-weight:700}',
+    '.obby-dl li.th b{min-width:0}',
     '.obby-dc .obby-btns{margin-top:6px;align-self:stretch}',
     '@media (max-width:1150px){.obby-ttl{display:none}}',
     '@media (max-width:900px),(max-height:560px){.obby-top{gap:6px}.obby-top .btn{font-size:16px;padding:0 11px}.obby-top .obby-tab{padding:0 9px}.obby-tabs{gap:4px}.obby-pill{font-size:18px;padding:0 10px}.obby-pill.dark{min-width:104px}' +
@@ -1245,7 +1453,16 @@
       '.obby-row{font-size:14.5px}.obby-row b{font-size:17px}.obby-lb{font-size:14.5px;padding:3px 9px}.obby-lb li{line-height:1.35}.obby-rew{font-size:13.5px}.obby-chap{height:50px;font-size:15.5px}.obby-chap i{font-size:12px}.obby-seg .btn{height:48px;font-size:16px}.obby-state{font-size:14.5px;min-height:36px}' +
       '.obby-btns .btn{font-size:17px;height:50px}.obby-key{width:78px;height:78px}.obby-key.r{left:102px}.obby-key.j{width:100px;height:100px}.obby-who{bottom:130px}.obby-pc{width:104px;font-size:14px}' +
       '.obby-rk{width:74px;height:74px;font-size:29px;border-radius:22px}.obby-rk i{font-size:12.5px}.obby-rk.h{right:126px}.obby-rk.p{right:208px}' +
-      '.obby-dt{font-size:22px}.obby-dtime{font-size:28px}.obby-ds{font-size:19px}.obby-dx{font-size:15.5px}.obby-dl{font-size:15.5px}.obby-backme{height:56px;font-size:20px}.obby-lookn{font-size:18px}}'
+      '.obby-dt{font-size:22px}.obby-dtime{font-size:28px}.obby-ds{font-size:19px}.obby-dx{font-size:15.5px}.obby-dl{font-size:15.5px}.obby-backme{height:56px;font-size:20px}.obby-lookn{font-size:18px}' +
+      '.obby-seg .btn{font-size:15.5px}.obby-size .obby-seg{width:168px}.obby-sl{font-size:13px}.obby-tn{font-size:13px}.obby-team .btn{width:100px;height:48px;font-size:15.5px}.obby-team{padding:3px 7px 5px}}',
+    // three tower cards side by side on a small tablet: everything a size smaller, the two boards under each other
+    '@media (max-width:999px){.obby-lobby.three{gap:8px;padding:2px 8px 8px}.obby-lobby.three .obby-card{padding:6px 8px;gap:4px;border-radius:20px}.obby-lobby.three .obby-ico{width:30px;height:40px}' +
+      '.obby-lobby.three .obby-nm{font-size:12.5px;line-height:1.2}.obby-lobby.three .obby-nm b{font-size:16.5px}.obby-lobby.three .obby-mark{font-size:12px;padding:0 5px}.obby-lobby.three .obby-ch{gap:6px}' +
+      '.obby-lobby.three .obby-prog{font-size:15px;gap:5px}.obby-lobby.three .obby-flags i{height:12px;border-width:1.5px;border-radius:3px}.obby-lobby.three .obby-flags{gap:1px}.obby-lobby.three .obby-flags i.top{margin-right:2px}' +
+      '.obby-lobby.three .obby-chaps{gap:3px}.obby-lobby.three .obby-chap{height:48px;font-size:14px;border-width:2.5px}.obby-lobby.three .obby-chap i{font-size:11px}' +
+      '.obby-lobby.three .obby-rew{font-size:12.5px;gap:3px}.obby-lobby.three .obby-rew span{padding:0 6px}.obby-lobby.three .obby-lb2{grid-template-columns:minmax(0,1fr);gap:4px}' +
+      '.obby-lobby.three .obby-lb{font-size:13.5px;padding:2px 7px}.obby-lobby.three .obby-lbh{font-size:13px;margin-bottom:0}.obby-lobby.three .obby-lbh b{font-size:13px}.obby-lobby.three .obby-lb li{line-height:1.3}.obby-lobby.three .obby-lb li b{width:18px;height:18px;line-height:18px;font-size:12px}' +
+      '.obby-lobby.three .obby-now{font-size:13px}.obby-lobby.three .obby-btns{gap:5px}.obby-lobby.three .obby-btns .btn{font-size:15px;height:48px;padding:0 4px;border-width:3px}}'
   ].join('\n');
 
   // ---------- opening and closing ----------
@@ -1316,6 +1533,7 @@
     if (res !== RES) { RES = res; sprites = {}; spriteCount = 0; }
     var r = els.kr && els.kr.getBoundingClientRect();
     if (r && r.width) touch.mid = r.left - 6;
+    if (mode === 'lobby') renderLobby();        // (the tower cards show less on a small screen)
   }
   function setMode(m) {
     var lobby = m === 'lobby', spec = !!run && run.spec;
@@ -1345,6 +1563,8 @@
   }
 
   // ---------- the entrance: pick a way to play ----------
+  // a small tablet: three tower cards side by side need everything a size smaller
+  function small() { return cw < 1000 || ch < 600; }
   function renderLobby() {
     if (!root || mode !== 'lobby') return;
     var html, list, i;
@@ -1353,9 +1573,11 @@
     else if (tab === 'lava') html = lavaHtml();
     else if (tab === 'endless') html = endlessHtml();
     else if (tab === 'rope') html = ropeHtml();
-    else html = cardHtml('easy') + cardHtml('hard');
+    else { html = ''; for (i = 0; i < TOWER_IDS.length; i++) html += cardHtml(TOWER_IDS[i]); }
     list = els.tabs.children;
     for (i = 0; i < list.length; i++) list[i].className = 'btn obby-tab' + (list[i].getAttribute('data-tab') === tab ? ' on' : '');
+    i = 'obby-lobby' + (info && tab === 'climb' ? ' three' : '');
+    if (els.lobby.className !== i) els.lobby.className = i;
     if (html === lobbyHtml) return;      // nothing changed: leave the buttons alone
     lobbyHtml = html;
     els.lobby.innerHTML = html;
@@ -1376,40 +1598,50 @@
     var who = info.who || [], pl = api.players(), i, p, out = '';
     for (i = 0; i < who.length; i++) {
       p = pl[who[i][0]];
-      if (p && who[i][1] === place) out += '<span><i style="background:' + api.esc(p.color) + '"></i>' + api.esc(p.name) + ' ' + (who[i][3] ? '🏆' : '🚩' + who[i][2]) + '</span>';
+      if (p && who[i][1] === place) out += '<span><i style="background:' + api.esc(p.color) + '"></i>' + (TEAMS[who[i][5]] ? TEAMS[who[i][5]].ico + ' ' : '') + api.esc(p.name) + ' ' + (who[i][3] ? '🏆' : '🚩' + who[i][2]) + '</span>';
     }
     return out ? '<div class="obby-now">🧗 ' + out + '</div>' : '';
   }
   function cardHtml(id) {
     var cfg = info.towers[id] || {}, d = (info.me && info.me[id]) || {}, lb = info.lb || {}, n = cfg.stages || 30, nc = Math.ceil(n / CHAP), top = d.top || 0, cur = d.cur || 0, chb = d.ch || [], chest = cfg.chest || [];
-    var i, k, flags = '', chaps = '', rew = '', btns, open, done;
+    var i, k, flags = '', chaps = '', rew = '', btns, open, done, sm = small(), nrow = sm ? 2 : 3;
     for (i = 1; i <= n; i++) flags += '<i class="' + (i <= top ? 'on' : '') + (i % CHAP === 0 ? ' top' : '') + '"></i>';
     for (k = 0; k < nc; k++) {
       open = top >= k * CHAP; done = top >= (k + 1) * CHAP;
-      chaps += '<button class="btn obby-chap' + (done ? ' done' : '') + '" type="button" data-a="go" data-tower="' + id + '" data-from="' + (k * CHAP) + '"' + (open ? '' : ' disabled') + '><span>' + CHAPS[k % CHAPS.length].icon + ' ' + (k + 1) + '</span><i>' +
-        (!open ? '🔒' : chb[k] ? '⏱ ' + fmtS(chb[k]) : done ? '✔' : '▶') + '</i></button>';
+      chaps += '<button class="btn obby-chap' + (done ? ' done' : '') + '" type="button" data-a="go" data-tower="' + id + '" data-from="' + (k * CHAP) + '"' + (open ? '' : ' disabled') + '><span>' + chap(id, k).icon + ' ' + (k + 1) + '</span><i>' +
+        (!open ? '🔒' : chb[k] ? (sm ? '' : '⏱ ') + fmtS(chb[k]) : done ? '✔' : '▶') + '</i></button>';
     }
     if (top < n) {
       rew += '<span>🚩 +' + cfg.flag + ' ⭐</span>';
       k = Math.floor(top / CHAP);
-      if (chest[k]) rew += '<span>🎁 ' + CHAPS[k % CHAPS.length].icon + ' +' + chest[k] + ' ⭐</span>';
+      if (chest[k]) rew += '<span>🎁 ' + chap(id, k).icon + ' +' + chest[k] + ' ⭐</span>';
     }
     if (top >= CHAP) rew += d.left > 0 ? '<span>🔁 +' + cfg.rep + ' ⭐ · ' + d.left + ' left</span>' : '<span>🔁 ✔ today</span>';
     if (cur > 0) btns = '<button class="btn primary" type="button" data-a="go" data-tower="' + id + '" data-from="' + cur + '">▶ Go on 🚩' + cur + '</button><button class="btn" type="button" data-a="go" data-tower="' + id + '" data-from="0">⏱ New run</button>';
     else btns = '<button class="btn primary" type="button" data-a="go" data-tower="' + id + '" data-from="0">⏱ Start</button>';
-    return '<div class="obby-card"><div class="obby-ch"><canvas class="obby-ico" width="92" height="124" data-ico="' + id + '"></canvas><div class="obby-nm">' + api.three(TOWER_NAME[id]) + '</div></div>' +
+    // (the flames say how hard the tower is: nobody should pick the Dragon Tower by accident)
+    return '<div class="obby-card"><div class="obby-ch"><canvas class="obby-ico" width="92" height="124" data-ico="' + id + '"></canvas><div class="obby-nm">' + api.three(TOWER_NAME[id]) + '</div><div class="obby-mark">' + TOWER_MARK[id] + '</div></div>' +
       '<div class="obby-prog"><span>🚩</span><span class="obby-flags">' + flags + '</span><span>' + top + '/' + n + '</span></div>' +
       '<div class="obby-chaps">' + chaps + '</div>' +
       '<div class="obby-rew">' + rew + '</div>' +
-      '<div class="obby-lb2">' + boardHtml('🏆 🚩1–12', lb[id], function (e) { return fmt(e.ms); }, 3, d.best ? '⏱ ' + fmt(d.best) + ' ' + medal(id, d.best) : '') + boardHtml('🏆 🚩1–' + n, lb.full && lb.full[id], function (e) { return fmt(e.ms); }, 3, d.full ? '⏱ ' + fmt(d.full) + ' ' + medal(id, d.full, true) : '') + '</div>' +
+      '<div class="obby-lb2">' + boardHtml('🏆 🚩1–12', lb[id], function (e) { return fmt(e.ms); }, nrow, d.best ? '⏱ ' + fmt(d.best) + ' ' + medal(id, d.best) : '') + boardHtml('🏆 🚩1–' + n, lb.full && lb.full[id], function (e) { return fmt(e.ms); }, nrow, d.full ? '⏱ ' + fmt(d.full) + ' ' + medal(id, d.full, true) : '') + '</div>' +
       whoHtml(id) +
       '<div class="obby-btns">' + btns + '</div></div>';
   }
-  function partyOf(md) { var p = (info.pt && info.pt[md]) || {}; return { state: p.state || 'idle', tower: p.tower === 'hard' ? 'hard' : 'easy', ch: p.ch || 0, at: p.at || 0, ready: p.ready || [], on: p.on || [] }; }
+  function partyOf(md) {
+    var p = (info.pt && info.pt[md]) || {};
+    return { state: p.state || 'idle', tower: towerId(p.tower), ch: p.ch || 0, at: p.at || 0, ready: p.ready || [], on: p.on || [],
+      size: p.size || 2, teams: Array.isArray(p.teams) ? p.teams : [[], []], run: p.run || null };
+  }
   function amReady(P) { var me = api.self(); return !!me && P.ready.indexOf(me.name) >= 0; }
+  // the buttons that pick a tower, each with its flames
   function segHtml(pick, v, lock) {
-    return '<div class="obby-seg"><button class="btn' + (v === 'easy' ? ' on' : '') + '" type="button" data-a="pick" data-k="' + pick + '" data-v="easy"' + (lock ? ' disabled' : '') + '>' + api.esc(TOWER_NAME.easy.en) + '</button>' +
-      '<button class="btn' + (v === 'hard' ? ' on' : '') + '" type="button" data-a="pick" data-k="' + pick + '" data-v="hard"' + (lock ? ' disabled' : '') + '>' + api.esc(TOWER_NAME.hard.en) + '</button></div>';
+    var i, id, out = '';
+    for (i = 0; i < TOWER_IDS.length; i++) {
+      id = TOWER_IDS[i];
+      out += '<button class="btn' + (v === id ? ' on' : '') + '" type="button" data-a="pick" data-k="' + pick + '" data-v="' + id + '"' + (lock ? ' disabled' : '') + '><span>' + api.esc(TOWER_SHORT[id]) + '</span><i>' + TOWER_MARK[id] + '</i></button>';
+    }
+    return '<div class="obby-seg">' + out + '</div>';
   }
   // who is ready, the countdown, or the round that is on
   function stateHtml(md, P) {
@@ -1421,14 +1653,13 @@
       return '<div class="obby-state">' + out + '</div>';
     }
     for (i = 0; i < P.ready.length; i++) out += '<span>✔ ' + api.esc(P.ready[i]) + '</span>';
-    if (P.state === 'gather' && md === 'rope' && !P.at) out += '<b>⏳ 👤+👤</b>';        // a rope team waits for its second climber
-    else if (P.state === 'gather') out += '<b class="obby-cd" data-at="' + P.at + '"></b>';
+    if (P.state === 'gather') out += '<b class="obby-cd" data-at="' + P.at + '"></b>';
     else out = '<span>🙋 ' + MODE_ICON[md] + ' 3 · 2 · 1 …</span>';
     return '<div class="obby-state">' + out + '</div>';
   }
-  // off = this way to play cannot be started right now (a rope team alone at the tower)
-  function readyBtns(md, P, off) {
-    var ready = amReady(P), ico = MODE_ICON[md], dis = off ? ' disabled' : '';
+  // (a race or a lava round; the rope teams have their own buttons, see teamBox)
+  function readyBtns(md, P) {
+    var ready = amReady(P), ico = MODE_ICON[md], dis = '';
     if (P.state === 'run') return '<button class="btn" type="button" data-a="watch" data-mode="' + md + '">👀 Watch</button>' +
       (ready ? '<button class="btn" type="button" data-a="unready" data-mode="' + md + '">✖ Not ready</button>' : '<button class="btn primary" type="button" data-a="ready" data-mode="' + md + '"' + dis + '>' + ico + ' Next round</button>');
     if (ready) return '<button class="btn" type="button" data-a="unready" data-mode="' + md + '">✖ Not ready</button>';
@@ -1437,27 +1668,59 @@
   // how many players are at the tower right now (a rope team needs two)
   function atTower() { var pl = api.players(), id, n = 0; for (id in pl) if (pl[id] && pl[id].room === 'obby') n++; return n; }
   // Rope Team: two to four climbers tied together climb one chapter. Alone the card is grey: it takes two.
+  // which rope I have picked for the round that gathers (or for the next one): 0 red, 1 blue, -1 none
+  function myRope(P) {
+    var id = String(api.myId()), me = api.self(), t, i, l;
+    for (t = 0; t < 2; t++) { l = P.teams[t] || []; for (i = 0; i < l.length; i++) if (String(l[i][0]) === id || (me && l[i][1] === me.name)) return t; }
+    return -1;
+  }
+  // one rope with its places: who is in it, and the button that joins it, switches to it or leaves it
+  function teamBox(P, t, size, mine, off) {
+    var T = TEAMS[t], l = P.teams[t] || [], pl = api.players(), id = String(api.myId()), i, p, slots = '', n = l.length, full = n >= size, btn;
+    for (i = 0; i < Math.max(size, n); i++) {
+      if (i < n) { p = pl[l[i][0]] || {}; slots += '<span class="in' + (String(l[i][0]) === id ? ' me' : '') + '"><i style="background:' + api.esc(p.color || '#fff') + '"></i><u>' + api.esc(l[i][1]) + '</u></span>'; }
+      else slots += '<span>＋ 👤</span>';
+    }
+    if (mine === t) btn = '<button class="btn" type="button" data-a="unready" data-mode="rope">✖ Leave</button>';
+    else btn = '<button class="btn primary" type="button" data-a="team" data-v="' + t + '"' + (full || off ? ' disabled' : '') + '>' + (full ? 'Full' : mine >= 0 ? '⇄ Switch' : T.ico + ' Join') + '</button>';
+    return '<div class="obby-team" style="background:' + T.soft + '"><div class="obby-tn"><span class="n">' + T.ico + ' ' + api.three(T) + '</span><em>' + n + ' / ' + size + '</em></div>' +
+      '<div class="obby-tr"><div class="obby-slots">' + slots + '</div>' + btn + '</div></div>';
+  }
+  // Rope Team: climbers tied together climb one chapter. Whoever opens the round picks the tower, the chapter and how many
+  // climbers a rope holds; everybody picks the Red Rope or the Blue Rope. Alone at the tower the card is grey: it takes two.
   function ropeHtml() {
-    var P = partyOf('rope'), lock = P.state === 'gather', tower = lock ? P.tower : sel.pt, me = info.me || {}, d = me[tower] || {}, r = me.rope || { left: 0 }, lb = info.lb || {}, caps = info.caps || {};
-    var cfg = info.towers[tower] || {}, nc = Math.ceil((cfg.stages || 30) / CHAP), pay = cfg.rope || [1, 3], need = caps.ropeMin || 2, alone = atTower() < need;
-    var open = Math.max(d.top || 0, (lb.ropeTop || {})[tower] || 0), k, chaps = '', ch, best, list;
+    var P = partyOf('rope'), on = P.state === 'run', lock = P.state === 'gather', tower = lock ? P.tower : sel.pt, me = info.me || {}, d = me[tower] || {}, r = me.rope || { left: 0 }, lb = info.lb || {}, caps = info.caps || {};
+    var cfg = info.towers[tower] || {}, nc = Math.ceil((cfg.stages || 30) / CHAP), pay = cfg.rope || [1, 3], need = caps.ropeMin || 2, alone = atTower() < need, mine = myRope(P), sizes = caps.ropeSizes || [2, 4];
+    var open = Math.max(d.top || 0, (lb.ropeTop || {})[tower] || 0), k, chaps = '', ch, best, list, seg = '', state, a = (P.teams[0] || []).length, b = (P.teams[1] || []).length;
+    var set = lock || (on && P.ready.length > 0), size = set ? P.size : sel.ps, i, T;       // set: the round (or the next one) has its size already
     if (!lock && open < sel.pc * CHAP) sel.pc = 0;
     ch = lock ? P.ch : sel.pc;
     list = lb.rope && lb.rope[tower] ? lb.rope[tower] : [];
     for (k = 0; k < nc; k++) {
       best = list[k] && list[k][0] ? list[k][0].ms : 0;
-      chaps += '<button class="btn obby-chap' + (k === ch ? ' on' : '') + '" type="button" data-a="pick" data-k="pc" data-v="' + k + '"' + (!lock && open >= k * CHAP ? '' : ' disabled') + '><span>' + CHAPS[k % CHAPS.length].icon + ' ' + (k + 1) + '</span><i>' +
+      chaps += '<button class="btn obby-chap' + (k === ch ? ' on' : '') + '" type="button" data-a="pick" data-k="pc" data-v="' + k + '"' + (!lock && open >= k * CHAP ? '' : ' disabled') + '><span>' + chap(tower, k).icon + ' ' + (k + 1) + '</span><i>' +
         (open < k * CHAP ? '🔒' : best ? '🤝 ' + fmtS(best) : '▶') + '</i></button>';
     }
+    // the rope size: mine to pick until a round gathers, then anybody with a rope may change it (never under the size of a team)
+    for (k = sizes[0]; k <= sizes[1]; k++) seg += '<button class="btn' + (k === size ? ' on' : '') + '" type="button" data-a="size" data-v="' + k + '"' + (set && (mine < 0 || a > k || b > k) ? ' disabled' : '') + '>' + k + '</button>';
+    if (on) {
+      state = '<span>🤝 …</span>';
+      for (i = 0; i < (P.run || []).length; i++) { T = P.run[i]; if (T.n) state += '<span>' + TEAMS[i].ico + ' ' + (T.won ? '🏁' : T.over ? '✖ ' : '') + '🚩 ' + T.flag + '/' + T.of + '</span>'; }
+    }
+    else if (alone) state = '<span>👤 + 👤 = 🤝</span><b>' + atTower() + ' / ' + need + '</b>';
+    else if (lock && P.at) state = '<span>🤝 ' + (a ? TEAMS[0].ico + ' ' + a : '') + (a && b ? ' · ' : '') + (b ? TEAMS[1].ico + ' ' + b : '') + '</span><b class="obby-cd" data-at="' + P.at + '"></b>';
+    else if (lock) state = '<span>' + (a === 1 ? TEAMS[0].ico + ' ' : b === 1 ? TEAMS[1].ico + ' ' : '') + '👤 + 👤 = 🤝</span><b>⏳</b>';       // a rope with one climber waits for the second
+    else state = '<span>🙋 ' + TEAMS[0].ico + ' / ' + TEAMS[1].ico + ' → 3 · 2 · 1 …</span>';
     return '<div class="obby-card"' + (alone ? ' style="filter:grayscale(.9)"' : '') + '><div class="obby-ch"><div class="obby-emo">🤝</div><div class="obby-nm">' + api.three(MODE_NAME.rope) + '</div></div>' +
       segHtml('pt', tower, lock) + '<div class="obby-chaps">' + chaps + '</div>' +
-      '<div class="obby-sub">' + CHAPS[ch % CHAPS.length].icon + ' ' + api.three(CHAPS[ch % CHAPS.length]) + '</div>' +
-      '<div class="obby-rew"><span>🚩 👤👤 = +' + pay[0] + ' ⭐</span><span>🏆 +' + pay[1] + ' ⭐</span><span>' + (r.left > 0 ? r.left + ' left today' : '✔ today') + '</span></div>' +
-      (alone ? '<div class="obby-state"><span>👤 + 👤 = 🤝</span><b>' + atTower() + ' / ' + need + '</b></div>' : stateHtml('rope', P)) +
-      '<div class="obby-btns">' + readyBtns('rope', P, alone) + '</div></div>' +
-      '<div class="obby-card"><div class="obby-row"><span>🤝 🚩 <b>' + (r.flags || 0) + '</b></span><span>🏆 <b>' + (r.wins || 0) + '</b></span></div>' +
-      '<div class="obby-row"><span>✊ = ⚓</span><span>💪 = ⬆👤</span><span>👤⤵ + 👆👆 = ⬆</span></div>' +
-      boardHtml('⏱ 🤝 ' + api.esc(TOWER_NAME[tower].en) + ' ' + CHAPS[ch % CHAPS.length].icon + (ch + 1), list[ch], function (e) { return fmt(e.ms); }, 3) + whoHtml('rope') + '</div>';
+      '<div class="obby-sub">' + chap(tower, ch).icon + ' ' + api.three(chap(tower, ch)) + '</div>' +
+      '<div class="obby-size"><div class="obby-sl">🪢 👤 × ' + size + '<br>' + api.three(SIZE_NAME) + '</div><div class="obby-seg">' + seg + '</div></div>' +
+      '<div class="obby-rew"><span>🚩 👤👤 = +' + pay[0] + ' ⭐</span><span>🏆 +' + pay[1] + ' ⭐</span><span>🥇 ' + TEAMS[0].ico + TEAMS[1].ico + ' +' + (caps.ropeWin || 2) + ' ⭐</span><span>' + (r.left > 0 ? r.left + ' left today' : '✔ today') + '</span></div>' +
+      '<div class="obby-state">' + state + '</div></div>' +
+      '<div class="obby-card">' + teamBox(P, 0, size, mine, alone) + teamBox(P, 1, size, mine, alone) +
+      (on ? '<div class="obby-btns" style="margin-top:0"><button class="btn" type="button" data-a="watch" data-mode="rope">👀 Watch</button></div>' : '') +
+      '<div class="obby-row"><span>🤝 🚩 <b>' + (r.flags || 0) + '</b></span><span>🏆 <b>' + (r.wins || 0) + '</b></span><span>🥇 <b>' + (r.races || 0) + '</b></span><span>✊ = ⚓ · 💪 = ⬆👤</span></div>' +
+      boardHtml('⏱ 🤝 ' + api.esc(TOWER_NAME[tower].en) + ' ' + chap(tower, ch).icon + (ch + 1), list[ch], function (e) { return fmt(e.ms); }, 3) + whoHtml('rope') + '</div>';
   }
   function raceHtml() {
     var P = partyOf('race'), lock = P.state === 'gather', tower = lock ? P.tower : sel.rt, me = info.me || {}, d = me[tower] || {}, r = me.race || { left: 0, best: {} }, lb = info.lb || {};
@@ -1466,17 +1729,17 @@
     ch = lock ? P.ch : sel.rc;
     for (k = 0; k < nc; k++) {
       best = (r.best || {})[tower + k];
-      chaps += '<button class="btn obby-chap' + (k === ch ? ' on' : '') + '" type="button" data-a="pick" data-k="rc" data-v="' + k + '"' + (!lock && top >= k * CHAP ? '' : ' disabled') + '><span>' + CHAPS[k % CHAPS.length].icon + ' ' + (k + 1) + '</span><i>' +
+      chaps += '<button class="btn obby-chap' + (k === ch ? ' on' : '') + '" type="button" data-a="pick" data-k="rc" data-v="' + k + '"' + (!lock && top >= k * CHAP ? '' : ' disabled') + '><span>' + chap(tower, k).icon + ' ' + (k + 1) + '</span><i>' +
         (top < k * CHAP ? '🔒' : best ? '👻 ' + fmtS(best) : '▶') + '</i></button>';
     }
     best = (r.best || {})[tower + ch];
     return '<div class="obby-card"><div class="obby-ch"><div class="obby-emo">🏁</div><div class="obby-nm">' + api.three(MODE_NAME.race) + '</div></div>' +
       segHtml('rt', tower, lock) + '<div class="obby-chaps">' + chaps + '</div>' +
-      '<div class="obby-sub">' + CHAPS[ch % CHAPS.length].icon + ' ' + api.three(CHAPS[ch % CHAPS.length]) + '</div>' +
+      '<div class="obby-sub">' + chap(tower, ch).icon + ' ' + api.three(chap(tower, ch)) + '</div>' +
       '<div class="obby-rew"><span>🥇 +' + pay[0] + ' ⭐</span><span>🏁 +' + pay[1] + ' ⭐</span><span>👻 +' + (pay[1] + 1) + ' ⭐</span><span>' + (r.left > 0 ? r.left + ' left today' : '✔ today') + '</span></div>' +
       stateHtml('race', P) + '<div class="obby-btns">' + readyBtns('race', P) + '</div></div>' +
-      '<div class="obby-card"><div class="obby-row"><span>👻 ' + api.esc(TOWER_NAME[tower].en) + ' ' + CHAPS[ch % CHAPS.length].icon + (ch + 1) + ' <b>' + (best ? fmt(best) : '–:––') + '</b></span><span>🏆 <b>' + (r.wins || 0) + '</b></span></div>' +
-      boardHtml('⏱ ' + api.esc(TOWER_NAME[tower].en) + ' ' + CHAPS[ch % CHAPS.length].icon + (ch + 1), lb.chap && lb.chap[tower] && lb.chap[tower][ch], function (e) { return fmt(e.ms); }, 3) +
+      '<div class="obby-card"><div class="obby-row"><span>👻 ' + api.esc(TOWER_NAME[tower].en) + ' ' + chap(tower, ch).icon + (ch + 1) + ' <b>' + (best ? fmt(best) : '–:––') + '</b></span><span>🏆 <b>' + (r.wins || 0) + '</b></span></div>' +
+      boardHtml('⏱ ' + api.esc(TOWER_NAME[tower].en) + ' ' + chap(tower, ch).icon + (ch + 1), lb.chap && lb.chap[tower] && lb.chap[tower][ch], function (e) { return fmt(e.ms); }, 3) +
       boardHtml('🏆 ' + api.esc(MODE_NAME.race.en) + ' 🥇', lb.race, function (e) { return '🥇 × ' + e.wins; }, 5) + whoHtml('race') + '</div>';
   }
   function lavaHtml() {
@@ -1485,7 +1748,7 @@
     return '<div class="obby-card"><div class="obby-ch"><div class="obby-emo">🌋</div><div class="obby-nm">' + api.three(MODE_NAME.lava) + '</div></div>' +
       segHtml('lt', tower, lock) +
       '<div class="obby-sub">' + api.three(TOWER_NAME[tower]) + '</div>' +
-      '<div class="obby-rew"><span>' + (cfg.lava === 0.5 ? '🚩🚩 = ⭐' : '🚩🚩🚩🚩 = ⭐⭐⭐') + '</span><span>max ' + (caps.lavaMax || 8) + ' ⭐</span><span>🥇 +' + (caps.lavaWin || 2) + ' ⭐</span><span>' + (l.left > 0 ? l.left + ' left today' : '✔ today') + '</span></div>' +
+      '<div class="obby-rew"><span>' + (cfg.lava === 0.5 ? '🚩🚩 = ⭐' : cfg.lava >= 1 ? '🚩 = ⭐' : '🚩🚩🚩🚩 = ⭐⭐⭐') + '</span><span>max ' + (caps.lavaMax || 8) + ' ⭐</span><span>🥇 +' + (caps.lavaWin || 2) + ' ⭐</span><span>' + (l.left > 0 ? l.left + ' left today' : '✔ today') + '</span></div>' +
       stateHtml('lava', P) + '<div class="obby-btns">' + readyBtns('lava', P) + '</div></div>' +
       '<div class="obby-card"><div class="obby-row"><span>⬆ ' + api.esc(TOWER_NAME[tower].en) + ' <b>' + (best ? best + ' m' : '–') + '</b></span><span>🏆 <b>' + (l.wins || 0) + '</b></span></div>' +
       boardHtml('🏆 ⬆ ' + api.esc(TOWER_NAME[tower].en), lb.lava && lb.lava[tower], function (e) { return '⬆ ' + e.h + ' m'; }, 5) + whoHtml('lava') + '</div>';
@@ -1503,14 +1766,23 @@
       '<div class="obby-card">' + boardHtml('📅 ' + dayTxt(lb.day || info.day) + ' 🏆', lb.today, function (x) { return '🚩 ' + x.n; }, 5) + boardHtml('🏅 🏆', lb.all, function (x) { return '🚩 ' + x.n; }, 5) + '</div>';
   }
   function drawIcon(cnv, id) {       // a little picture of the tower for its card
-    var g = cnv.getContext('2d'), def = TOWERS[id], i;
+    var g = cnv.getContext('2d'), def = TOWERS[id], i, cols;
     if (!def) return;
+    cols = def.cols || LOOKS[def.looks[1]].cols;
     g.setTransform(2, 0, 0, 2, 0, 0); g.clearRect(0, 0, 46, 62); g.lineJoin = 'round';
     g.beginPath(); g.rect(12, 20, 22, 40); g.fillStyle = def.wall; g.fill(); ol(g, 2.5);
     g.fillStyle = 'rgba(27,42,73,0.22)'; g.fillRect(27, 21, 6, 38);
+    if (def.far === 2) {     // the Dragon Tower: horns on the roof and two glowing eyes
+      poly(g, [9, 17, 11, 5, 17, 14]); g.fillStyle = '#FFF3D6'; g.fill(); ol(g, 2);
+      poly(g, [37, 17, 35, 5, 29, 14]); g.fillStyle = '#FFF3D6'; g.fill(); ol(g, 2);
+    }
     poly(g, [7, 21, 23, 4, 39, 21]); g.fillStyle = def.trim; g.fill(); ol(g, 2.5);
     g.strokeStyle = NAVY; g.lineWidth = 2; g.beginPath(); g.moveTo(23, 4); g.lineTo(23, -2); g.stroke();
-    for (i = 0; i < 3; i++) { rr(g, i % 2 ? 26 : 3, 50 - i * 12, 17, 6, 2); g.fillStyle = def.cols[i * 2]; g.fill(); ol(g, 2); }
+    if (def.far === 2) {
+      g.fillStyle = '#FFD23F'; g.beginPath(); g.arc(18.5, 28, 2.6, 0, TAU); g.fill(); ol(g, 1.5); g.beginPath(); g.arc(27.5, 28, 2.6, 0, TAU); g.fill(); ol(g, 1.5);
+      g.fillStyle = NAVY; g.fillRect(18, 26.2, 1, 3.6); g.fillRect(27, 26.2, 1, 3.6);
+    }
+    for (i = 0; i < 3; i++) { rr(g, i % 2 ? 26 : 3, 50 - i * 12, 17, 6, 2); g.fillStyle = cols[i * 2]; g.fill(); ol(g, 2); }
   }
   function onTabClick(e) {
     var el = e.target;
@@ -1520,43 +1792,52 @@
     tab = el.getAttribute('data-tab');
     renderLobby();
   }
-  function sendReady(md) {
-    api.send({ t: 'obby.ready', mode: md, tower: md === 'race' ? sel.rt : md === 'rope' ? sel.pt : sel.lt, ch: md === 'rope' ? sel.pc : sel.rc, on: true });
+  function sendReady(md, team) {
+    var m = { t: 'obby.ready', mode: md, tower: md === 'race' ? sel.rt : md === 'rope' ? sel.pt : sel.lt, ch: md === 'rope' ? sel.pc : sel.rc, on: true };
+    if (md === 'rope') { m.team = team === 1 ? 1 : 0; m.size = sel.ps; }      // which rope, and how many climbers a rope holds (counts when I open the round)
+    api.send(m);
   }
   function onLobbyClick(e) {
-    var el = e.target, a, md;
+    var el = e.target, a, md, k, P;
     while (el && el !== els.lobby && !(el.getAttribute && el.getAttribute('data-a'))) el = el.parentNode;
     if (!el || el === els.lobby || el.disabled) return;
     if (el.blur) el.blur();
     a = el.getAttribute('data-a'); md = el.getAttribute('data-mode');
     if (a === 'go') api.send({ t: 'obby.start', tower: el.getAttribute('data-tower'), from: parseInt(el.getAttribute('data-from'), 10) || 0 });
     else if (a === 'pick') {
-      if (el.getAttribute('data-k') === 'rc' || el.getAttribute('data-k') === 'pc') sel[el.getAttribute('data-k')] = parseInt(el.getAttribute('data-v'), 10) || 0;
-      else sel[el.getAttribute('data-k')] = el.getAttribute('data-v') === 'hard' ? 'hard' : 'easy';
+      k = el.getAttribute('data-k');
+      if (k === 'rc' || k === 'pc') sel[k] = parseInt(el.getAttribute('data-v'), 10) || 0;
+      else sel[k] = towerId(el.getAttribute('data-v'));
       renderLobby();
     }
+    else if (a === 'size') {         // climbers on a rope: my own pick, or (once a round gathers) a wish to the server
+      k = clamp(parseInt(el.getAttribute('data-v'), 10) || 2, 2, 4); P = partyOf('rope');
+      sel.ps = k;
+      if (P.state === 'gather' || (P.state === 'run' && P.ready.length)) api.send({ t: 'obby.size', n: k }); else renderLobby();
+    }
+    else if (a === 'team') sendReady('rope', parseInt(el.getAttribute('data-v'), 10) || 0);
     else if (a === 'ready') sendReady(md);
     else if (a === 'unready') api.send({ t: 'obby.ready', mode: md, on: false });
     else if (a === 'watch') api.send({ t: 'obby.watch', mode: md });
     else if (a === 'endless') api.send({ t: 'obby.start', mode: 'endless' });
   }
   function onDoneClick(e) {
-    var el = e.target, a, md;
+    var el = e.target, a, md, team = 0;
     while (el && el !== els.done && !(el.getAttribute && el.getAttribute('data-act'))) el = el.parentNode;
     if (!el || el === els.done || !run) return;
     if (el.blur) el.blur();
     a = el.getAttribute('data-act'); md = run.mode;
     if (a === 'again' && md === 'tower') api.send({ t: 'obby.start', tower: run.tower, from: 0 });
     else if (a === 'again' && md === 'endless') api.send({ t: 'obby.start', mode: 'endless' });
-    else if (a === 'again') {          // ready for the next round of the same race / lava
-      if (md === 'race') { sel.rt = run.tower === 'hard' ? 'hard' : 'easy'; sel.rc = Math.floor(run.from / CHAP); }
-      else if (md === 'rope') {      // the same chapter again, or the next one when the team got to the top of this one
-        sel.pt = run.tower === 'hard' ? 'hard' : 'easy';
-        sel.pc = Math.min(Math.floor(run.from / CHAP) + (run.res && run.res.won ? 1 : 0), Math.ceil(tw.n / CHAP) - 1);
-      } else sel.lt = run.tower === 'hard' ? 'hard' : 'easy';
+    else if (a === 'again') {          // ready for the next round of the same race / lava / rope
+      if (md === 'race') { sel.rt = towerId(run.tower); sel.rc = Math.floor(run.from / CHAP); }
+      else if (md === 'rope') {      // the same rope and the same chapter again, or the next chapter when my rope got to the top of this one
+        sel.pt = towerId(run.tower); sel.ps = clamp(run.size || sel.ps, 2, 4); team = run.mine === 1 ? 1 : 0;
+        sel.pc = Math.min(Math.floor(run.from / CHAP) + (run.mine >= 0 && run.team.won ? 1 : 0), Math.ceil(tw.n / CHAP) - 1);
+      } else sel.lt = towerId(run.tower);
       tab = md;
       toLobby();
-      sendReady(md);
+      sendReady(md, team);
     }
     else if (a === 'hide') { run.hide = true; setMode('run'); }
     else { if (md !== 'tower') tab = md === 'endless' ? 'endless' : md; toLobby(); }
@@ -1610,12 +1891,15 @@
   // ---------- looking at the others (only on this tablet: the server and the other players do not notice) ----------
   // While I look away my own player waits where it is: it is not moved and nothing on the screen can hurt it.
   function startLook(id, y, auto) {
+    var live;
     if (!run || !st || mode === 'lobby') return;
-    if (run.mode === 'rope' && !run.spec) return;      // tied to the others: my climber cannot wait while I look around (the view takes in the team anyway)
+    // Tied to the others my climber cannot wait for me: the game goes on while I look around (hands off the stick; the
+    // two rope buttons still work), and nothing protects it.
+    live = run.mode === 'rope' && !run.spec;
     if (!look) {
-      look = { id: 0, y: cam.y, last: now(), auto: false, T0: towerTime(), on: st.on, off: 0 };
+      look = { id: 0, y: cam.y, last: now(), auto: false, T0: towerTime(), on: st.on, off: 0, live: live };
       if (st.on >= 0) { pos(tw.ents[st.on], st.T, PB); look.off = st.x - PB.x; }
-      dropTouch();
+      if (live) { touch.id = null; touch.dir = 0; touch.jumps = {}; touch.n = 0; } else dropTouch();
     }
     look.id = id; look.last = now(); look.auto = !!auto || run.spec;
     if (!id) look.y = clamp(y, tw.top - vh * 0.75, gap - vh);
@@ -1624,7 +1908,7 @@
     var k, dtp;
     if (!look) return;
     if (run && run.spec) { look.id = -1; look.auto = true; look.last = now(); return; }      // no player of my own to go back to: follow the best one
-    if (st && run) {
+    if (st && run && !look.live) {
       dtp = towerTime() - look.T0;       // clouds I stood on wait with me
       for (k in st.van) st.van[k] += dtp;
       st.T = towerTime();
@@ -1639,8 +1923,8 @@
     if (els.keys) els.keys.hidden = true;
     dropTouch();
   }
-  function barRange() {    // the heights the bar at the edge shows: the chapter of a race, else the whole tower
-    if (run && run.mode === 'race') return [-tw.stages[run.from].base, -tw.stages[Math.min(tw.n, run.end)].base];
+  function barRange() {    // the heights the bar at the edge shows: the chapter of a race or of a rope round, else the whole tower
+    if (run && (run.mode === 'race' || run.mode === 'rope')) return [-tw.stages[run.from].base, -tw.stages[Math.min(tw.n, run.end)].base];
     return [0, tw.height];
   }
   function barLook(e) {
@@ -1693,12 +1977,12 @@
       w = by[id]; o = rk[id];
       can = !!others[id];
       if (o && o[4]) txt = run.mode === 'lava' ? '✖ ' + o[5] + ' m' : '✖';
-      else if (w) txt = (w[1] === myPlace() ? '' : MODE_ICON[w[1]] || '🗼') + (w[3] ? '🏆' : '🚩' + ((run.mode === 'race' && w[1] === 'race') || (run.mode === 'rope' && w[1] === 'rope') ? w[2] - run.from : w[2]));
+      else if (w) txt = (w[1] === myPlace() ? '' : MODE_ICON[w[1]] || '🗼') + (TEAMS[w[5]] ? TEAMS[w[5]].ico : '') + (w[3] ? '🏆' : '🚩' + ((run.mode === 'race' && w[1] === 'race') || (run.mode === 'rope' && w[1] === 'rope') ? w[2] - run.from : w[2]));
       else txt = '🚪';
       list.push({ id: id, p: p, txt: txt, can: can, f: w ? w[2] : -1 });
     }
     list.sort(function (a, b) { return (b.can ? 1 : 0) - (a.can ? 1 : 0) || b.f - a.f || (a.p.name < b.p.name ? -1 : 1); });
-    txt = run.spec ? (run.watch ? '👀' : '✖') : '🚩' + (run.mode === 'race' ? Math.min(st.cp, run.end) - run.from : run.mode === 'rope' ? run.team.flag - run.from : st.cp);
+    txt = run.spec ? (run.watch ? '👀' : '✖') : (run.mode === 'rope' ? TEAMS[run.team.i].ico : '') + '🚩' + (run.mode === 'race' ? Math.min(st.cp, run.end) - run.from : run.mode === 'rope' ? run.team.flag - run.from : st.cp);
     html = '<button class="obby-pc me' + (look || run.spec ? '' : ' on') + '" type="button" data-id="me"' + (run.spec ? ' disabled' : '') + '><i style="background:' + api.esc(me.color || '#FF7A45') + '"></i><span><b>' + api.esc(me.name || '') + '</b><em>' + txt + '</em></span></button>';
     for (i = 0; i < list.length && i < 11; i++) {
       o = list[i]; cls = 'obby-pc' + (o.can ? '' : ' off') + (at && String(at.id) === String(o.id) ? ' on' : '');
@@ -1717,7 +2001,7 @@
   }
 
   function beginRun(m) {
-    var md = m.mode === 'race' || m.mode === 'lava' || m.mode === 'endless' || m.mode === 'rope' ? m.mode : 'tower', id = m.tower === 'hard' ? 'hard' : 'easy';
+    var md = m.mode === 'race' || m.mode === 'lava' || m.mode === 'endless' || m.mode === 'rope' ? m.mode : 'tower', id = towerId(m.tower), i;
     if (m.gone) {              // the next round began without us: back to the entrance
       if (run && run.mode === md && (run.res || run.spec)) { tab = md; toLobby(true); }
       return;
@@ -1736,10 +2020,16 @@
     if (run.at) run.goAt = run.at - EPOCH - tOff;
     if (m.ghost && m.ghost.ms > 0) run.ghost = { ms: m.ghost.ms, s: typeof m.ghost.s === 'string' ? m.ghost.s : '' };
     if (md === 'rope') {
-      // the team's flag is the server's; the rope to my neighbours is worked out here (see ropeBefore)
-      run.team = { flag: st.cp, from: st.cp, end: run.end, falls: 0, seq: (m.team && m.team.seq) || 0, pay: [1, 3] };
-      run.rp = newRope(); run.links = {}; run.chain = []; run.evx = 0; run.evy = 0; run.px = st.x; run.py = st.y;
-      setTeam(m.team);
+      // Two ropes at most (0 red, 1 blue); mine is run.team (somebody who watches: the one the HUD follows). The flag of a
+      // rope is the server's; the rope to my neighbours is worked out here (see ropeBefore).
+      run.mine = m.mine === 0 || m.mine === 1 ? m.mine : -1; run.size = m.size || 2; run.te = [null, null]; run.afterAt = 0; run.ended = false;
+      run.teams = [];
+      for (i = 0; i < 2; i++) run.teams.push({ i: i, n: 0, flag: st.cp, from: st.cp, end: run.end, falls: 0, seq: 0, pay: [1, 3], over: false, won: false, ms: 0, place: 0 });
+      run.team = run.teams[run.mine < 0 ? 0 : run.mine];
+      run.rp = newRope(); run.links = {}; run.chain = []; run.chains = [[], []]; run.tmOf = {}; run.evx = 0; run.evy = 0; run.px = st.x; run.py = st.y;
+      // (a rope that went back to its flag before I came: nothing for me to do again)
+      for (i = 0; i < (m.teams || []).length; i++) if (m.teams[i] && run.teams[m.teams[i].i]) run.teams[m.teams[i].i].seq = m.teams[i].seq || 0;
+      setTeams(m.teams);
       run.from = run.team.from;
     }
     others = {}; parts = []; pops = []; bounced = {}; squash = 0; deaths = 0; look = null;
@@ -1749,22 +2039,50 @@
     api.sfx('open');
   }
   // ---------- Rope Team on this tablet ----------
-  function setTeam(tm) {
-    var T = run && run.team;
-    if (!T || !tm) return;
-    T.flag = clamp(parseInt(tm.flag, 10) || 0, 0, tw.n); T.falls = tm.falls || 0;
-    if (typeof tm.from === 'number') T.from = tm.from;
-    if (typeof tm.end === 'number') T.end = tm.end;
-    if (Array.isArray(tm.pay)) T.pay = tm.pay;
-    run.acked = T.flag;
-    // the team went back to its flag while this tablet was not listening
-    if (tm.seq > T.seq) { T.seq = tm.seq; if (!run.spec && st) ropeHome(true); }
+  // The ropes as the server sends them (a whole team, or only what changed). Mine may have gone back to its flag while
+  // this tablet was not listening, or its round may be over while the other rope still climbs.
+  function setTeams(list) {
+    var i, tm, T;
+    if (!run || !run.teams || !Array.isArray(list)) return;
+    for (i = 0; i < list.length; i++) {
+      tm = list[i]; T = tm && run.teams[tm.i === 1 ? 1 : 0];
+      if (!T) continue;
+      if (typeof tm.n === 'number') T.n = tm.n;
+      T.flag = clamp(parseInt(tm.flag, 10) || 0, 0, tw.n); T.falls = tm.falls || 0;
+      if (typeof tm.from === 'number') T.from = tm.from;
+      if (typeof tm.end === 'number') T.end = tm.end;
+      if (Array.isArray(tm.pay)) T.pay = tm.pay;
+      if (tm.over !== undefined) { T.over = !!tm.over; T.won = !!tm.won; T.ms = tm.ms || 0; T.place = tm.place || 0; }
+      if (tm.seq > T.seq) { T.seq = tm.seq; if (T.i === run.mine && !run.spec && st) ropeHome(true); }
+    }
+    if (run.mine < 0) run.team = viewTeam();
+    run.acked = run.team.flag;
+    if (run.mine >= 0) myRopeEnd();
+  }
+  // somebody who only watches: the HUD follows the rope that still climbs (the higher one of two)
+  function viewTeam() {
+    var a = run.teams[0], b = run.teams[1];
+    if (!b.n) return a;
+    if (!a.n) return b;
+    if (a.over !== b.over) return a.over ? b : a;
+    return b.flag > a.flag ? b : a;
+  }
+  // My rope does not climb any more while the round goes on for the other one: at the top I stay where I am (still tied),
+  // else there were not two of us left and I only watch from now on.
+  function myRopeEnd() {
+    var T = run.team;
+    if (!T.over || run.ended || run.res) return;
+    run.ended = true;
+    if (T.won) { run.reached = true; run.endMs = T.ms; }
+    else { run.endMs = Math.max(0, now() - run.goAt); if (!run.spec) goSpec(); }
+    if (mode === 'run') { setMode('done'); renderDone(); }
   }
   // who is tied, in the order of the rope (from the round as the server sends it)
   function ropeChain() {
-    var rk = run.rk || [], i, list = [];
-    for (i = 0; i < rk.length; i++) if (!rk[i][4]) list.push(rk[i][0]);
-    run.chain = list;
+    var rk = run.rk || [], i, t;
+    run.chains = [[], []]; run.tmOf = {};
+    for (i = 0; i < rk.length; i++) { t = rk[i][6] === 1 ? 1 : 0; run.tmOf[rk[i][0]] = t; if (!rk[i][4]) run.chains[t].push(rk[i][0]); }
+    run.chain = run.mine >= 0 ? run.chains[run.mine] : [];        // the rope I am on
   }
   function ropeIndex() { var ch = run.chain, mine = String(api.myId()), i; for (i = 0; i < ch.length; i++) if (String(ch[i]) === mine) return i; return -1; }
   // side by side on a flag, in the order of the rope
@@ -1933,7 +2251,7 @@
   }
   function renderDone() {
     if (!root || !run) return;
-    var r, o, ms, extra = '', stars = '', falls, rows = '', i, e, key = myKey(), mine = null, race, title, html = '';
+    var r, o, ms, extra = '', stars = '', falls, rows = '', i, j, e, key = myKey(), mine = null, race, title, html = '', tms, T, my, nch;
     if (run.mode === 'tower') {
       r = run.result; ms = r ? r.ms : run.endMs;
       if (r) {
@@ -1946,21 +2264,32 @@
       html = '<div class="obby-dc"><div class="obby-dt">🏆 You reached the top!</div><div class="obby-dn">' + api.three(TOWER_NAME[run.tower]) + '</div>' +
         (ms ? '<div class="obby-dtime">⏱ ' + fmt(ms) + ' ' + medal(run.tower, ms, true) + '</div>' : '') +
         '<div class="obby-dx">' + (r ? extra : '…') + '</div>' +
-        (r && r.ch && r.ch.ms ? '<div class="obby-dx">' + CHAPS[r.ch.k % CHAPS.length].icon + ' ⏱ ' + fmt(r.ch.ms) + (r.ch.newBest ? ' ★' : '') + '</div>' : '') + falls + stars + btnsHtml('⏱ Again', !!r) + '</div>';
+        (r && r.ch && r.ch.ms ? '<div class="obby-dx">' + chap(run.tower, r.ch.k).icon + ' ⏱ ' + fmt(r.ch.ms) + (r.ch.newBest ? ' ★' : '') + '</div>' : '') + falls + stars + btnsHtml('⏱ Again', !!r) + '</div>';
     } else if (run.res && run.res.mode === 'rope') {
-      // a rope round is over: how far the team got together, and what everybody earned
-      r = run.res;
-      for (i = 0; i < r.rows.length; i++) {
-        e = r.rows[i];
-        rows += '<li' + (e.key === key ? ' class="me"' : '') + '><b>' + (e.out ? '✖' : '🤝') + '</b><span>' + api.esc(e.name) + '</span><em>🚩 ' + e.flag + (e.stars ? ' · +' + e.stars + ' ⭐' : '') + '</em></li>';
+      // a rope round is over: how far each rope got (the first one at the top has won), and what everybody earned
+      r = run.res; tms = (r.teams || []).slice(); my = -1; T = null;
+      for (i = 0; i < r.rows.length; i++) if (r.rows[i].key === key) my = r.rows[i].team;
+      tms.sort(function (a, b) { return (a.place || 9) - (b.place || 9) || b.flags - a.flags || a.falls - b.falls; });
+      for (j = 0; j < tms.length; j++) {
+        o = tms[j]; if (o.i === my || tms.length === 1) T = o;
+        rows += '<li class="th" style="background:' + TEAMS[o.i].soft + '"><b>' + (r.two && o.place === 1 ? '🥇' : o.won ? '🏁' : '🤝') + '</b><span>' + TEAMS[o.i].ico + ' ' + api.esc(TEAMS[o.i].en) + '</span><em>🚩 ' + o.flags + '/' + o.of + (o.won ? ' · ⏱ ' + fmt(o.ms) : '') + ' · ↩ ' + o.falls + '</em></li>';
+        for (i = 0; i < r.rows.length; i++) {
+          e = r.rows[i];
+          if (e.team === o.i) rows += '<li' + (e.key === key ? ' class="me"' : '') + '><b>' + (e.out ? '✖' : '🤝') + '</b><span>' + api.esc(e.name) + '</span><em>🚩 ' + e.flag + (e.stars ? ' · +' + e.stars + ' ⭐' : '') + '</em></li>';
+        }
       }
-      extra = r.won ? (r.rec ? '★ New team record!' : r.best ? 'Team best: ⏱ ' + fmt(r.best) : '') + (r.rank ? (r.rec || r.best ? ' · ' : '') + '🏆 #' + r.rank : '') : '';
-      html = '<div class="obby-dc"><div class="obby-dt">' + (r.won ? '🏆 The team made it!' : '🤝 The rope round is over') + '</div>' +
-        '<div class="obby-dn">' + api.three(MODE_NAME.rope) + ' · ' + api.esc((TOWER_NAME[r.tower] || TOWER_NAME.easy).en) + ' ' + CHAPS[r.ch % CHAPS.length].icon + (r.ch + 1) + '</div>' +
-        '<div class="obby-dtime">🚩 ' + r.flags + ' / ' + r.of + (r.won ? ' · ⏱ ' + fmt(r.ms) : '') + '</div>' +
-        '<div class="obby-dx">↩ 🚩 × ' + r.falls + (deaths ? ' · 💫 × ' + deaths : '') + '</div>' +
+      if (!r.two) title = T && T.won ? '🏆 The team made it!' : '🤝 The rope round is over';
+      else if (!TEAMS[r.win]) title = '🤝 The rope race is over';
+      else title = my === r.win ? '🏆 Your rope won the race!' : '🏁 ' + TEAMS[r.win].ico + ' ' + TEAMS[r.win].en + ' won the race';
+      if (T && T.won) extra = (T.rec ? '★ New team record!' : T.best ? 'Team best: ⏱ ' + fmt(T.best) : '') + (T.rank ? (T.rec || T.best ? ' · ' : '') + '🏆 #' + T.rank : '');
+      if (T && T.bonus) extra += (extra ? ' · ' : '') + '🥇 +' + T.bonus + ' ⭐';
+      nch = Math.ceil(tw.n / CHAP);
+      html = '<div class="obby-dc"><div class="obby-dt">' + title + '</div>' +
+        '<div class="obby-dn">' + api.three(MODE_NAME.rope) + ' · ' + api.esc((TOWER_NAME[r.tower] || TOWER_NAME.easy).en) + ' ' + chap(r.tower, r.ch).icon + (r.ch + 1) + '</div>' +
+        (T ? '<div class="obby-dtime">' + (r.two ? TEAMS[T.i].ico + ' ' : '') + '🚩 ' + T.flags + ' / ' + T.of + (T.won ? ' · ⏱ ' + fmt(T.ms) : '') + '</div>' : '') +
+        (deaths ? '<div class="obby-dx">💫 × ' + deaths + '</div>' : '') +
         '<ol class="obby-dl">' + rows + '</ol>' + (extra ? '<div class="obby-dx">' + extra + '</div>' : '') +
-        btnsHtml(r.won && r.ch + 1 < Math.ceil(tw.n / CHAP) ? '🤝 Next: ' + CHAPS[(r.ch + 1) % CHAPS.length].icon + (r.ch + 2) : '🤝 Again', true) + '</div>';
+        btnsHtml(T && T.won && r.ch + 1 < nch ? '🤝 Next: ' + chap(r.tower, r.ch + 1).icon + (r.ch + 2) : '🤝 Again', true) + '</div>';
     } else if (run.res) {
       // a race or a lava round is over: everybody and what they got
       r = run.res; race = r.mode === 'race';
@@ -1978,7 +2307,7 @@
         o = run.outRes;
         if (o) extra = o.rec ? '★ New record: ⬆ ' + o.h + ' m' : o.best ? 'Your best: ⬆ ' + o.best + ' m' : '';
       }
-      html = '<div class="obby-dc"><div class="obby-dt">' + title + '</div><div class="obby-dn">' + api.three(MODE_NAME[r.mode]) + ' · ' + api.esc((TOWER_NAME[r.tower] || TOWER_NAME.easy).en) + (race ? ' ' + CHAPS[r.ch % CHAPS.length].icon + (r.ch + 1) : '') + '</div>' +
+      html = '<div class="obby-dc"><div class="obby-dt">' + title + '</div><div class="obby-dn">' + api.three(MODE_NAME[r.mode]) + ' · ' + api.esc((TOWER_NAME[r.tower] || TOWER_NAME.easy).en) + (race ? ' ' + chap(r.tower, r.ch).icon + (r.ch + 1) : '') + '</div>' +
         '<ol class="obby-dl">' + rows + '</ol>' + (extra ? '<div class="obby-dx">' + extra + '</div>' : '') + btnsHtml(MODE_ICON[r.mode] + ' Again', true) + '</div>';
     } else if (run.mode === 'endless') {
       o = run.over;
@@ -1986,6 +2315,11 @@
         '<div class="obby-dtime">🚩 ' + (o ? o.flag : st.cp) + '</div>' +
         '<div class="obby-dx">' + (o ? '📅 🚩 ' + o.today + (o.rankToday ? ' (#' + o.rankToday + ')' : '') + ' · 🏅 🚩 ' + o.best : '…') + '</div>' +
         (o && o.stars ? '<div class="obby-ds">+' + o.stars + ' ⭐</div>' : '') + btnsHtml('▶ Again', !!o) + '</div>';
+    } else if (run.mode === 'rope') {
+      // my rope is done (at the top, or not two climbers left on it): the round goes on for the other rope
+      T = run.team; o = run.te ? run.te[T.i] : null; e = run.teams[1 - T.i];
+      html = '<div class="obby-dc mini"><div class="obby-dt">' + (T.won ? (T.place === 1 ? '🥇 ' : '🏁 ') + TEAMS[T.i].ico + ' ⏱ ' + fmt(T.ms) + (o && o.bonus ? ' · 🥇 +' + o.bonus + ' ⭐' : '') : '🤝 ' + TEAMS[T.i].ico + ' ✖ · 🚩 ' + (T.flag - T.from) + '/' + (T.end - T.from)) + '</div>' +
+        '<div class="obby-dx">' + (T.won && o && o.rec ? '★ New team record! · ' : '') + (e.n && !e.over ? '👀 ' + TEAMS[e.i].ico + ' 🚩 ' + (e.flag - e.from) + '/' + (e.end - e.from) + ' ⏳ …' : '⏳ …') + '</div></div>';
     } else if (run.mode === 'race') {
       // at the flag, the others are still racing
       o = run.fin;
@@ -2017,7 +2351,7 @@
               if (m.run.cel >= 0) run.c0 = now() - m.run.cel;
             }
             if (m.run.at) { run.at = m.run.at; run.goAt = run.at - EPOCH - tOff; }
-            if (run.mode === 'rope') setTeam(m.run.team);
+            if (run.mode === 'rope') setTeams(m.run.teams);
             if (m.run.out && !run.spec) { run.out = true; goSpec(); }
           } else resync();
         } else if (m.run && !m.run.fin) api.send({ t: 'obby.quit' });
@@ -2033,24 +2367,41 @@
         run.rk = Array.isArray(m.list) ? m.list : [];
         if (run.mode === 'rope') {
           ropeChain();
-          setTeam(m.team);
+          setTeams(m.teams);
           // before the start: everybody side by side on the flag, in the order of the rope
           if (!run.spec && st && run.goAt && now() < run.goAt) { spawn(tw, st); ropeSlot(); run.px = st.x; run.py = st.y; }
         }
         break;
-      case 'obby.tf':          // a flag for the rope team: everybody stood on it together
+      case 'obby.tf':          // a flag for a rope team: everybody in it stood on the flag together
         if (!run || run.mode !== 'rope' || !st) break;
-        run.team.flag = clamp(parseInt(m.i, 10) || 0, 0, tw.n); run.acked = run.team.flag;
-        o = tw.ents[tw.stages[run.team.flag].fi];
+        k = run.teams[m.team === 1 ? 1 : 0];
+        k.flag = clamp(parseInt(m.i, 10) || 0, 0, tw.n);
+        if (run.mine < 0) run.team = viewTeam();
+        if (k !== run.team) {        // the other rope: a short note
+          pop(TEAMS[k.i].ico + ' 🚩 ' + (k.flag - k.from) + ' / ' + (k.end - k.from), TEAMS[k.i].soft, 0, 2.4); api.sfx('tap');
+          break;
+        }
+        run.acked = k.flag;
+        o = tw.ents[tw.stages[k.flag].fi];
         puff(o.px, o.y - 44, 22, '#FFD23F', 190, 1);
-        pop('🚩 ' + (run.team.flag - run.from) + ' / ' + (run.end - run.from) + ' 🤝', '#D5F3DB', 0, 2.8);
+        pop('🚩 ' + (k.flag - run.from) + ' / ' + (run.end - run.from) + ' 🤝', '#D5F3DB', 0, 2.8);
         pop('⬆ ' + m.h0 + ' m + ' + (m.h - m.h0) + ' m = ' + m.h + ' m', '#fff', 34, 2.8);      // how high the team is now: a sum to read along
-        if (m.stars) { pop('+' + m.stars + ' ⭐', null, 68, 2.8); api.sfx(m.top ? 'chest' : 'star'); } else api.sfx('right');
+        if (m.stars) { pop('+' + m.stars + ' ⭐' + (m.bonus ? '  (🥇 +' + m.bonus + ')' : ''), null, 68, 2.8); api.sfx(m.top ? 'chest' : 'star'); } else api.sfx('right');
         if (m.top) { run.reached = true; run.endMs = now() - run.goAt; confetti(); } else confetti(26);
         break;
-      case 'obby.tr':          // the whole team is under its flag: everybody back to it together
+      case 'obby.tr':          // a whole team is under its flag: everybody in it goes back to that flag together
         if (!run || run.mode !== 'rope' || !st) break;
-        setTeam(m);
+        setTeams([{ i: m.team === 1 ? 1 : 0, flag: m.flag, falls: m.falls, seq: m.seq }]);
+        break;
+      case 'obby.te':          // a rope is at the top, or its round is over (not two climbers left); the round goes on for the other rope
+        if (!run || run.mode !== 'rope' || !st || !m.team) break;
+        i = m.team.i === 1 ? 1 : 0;
+        run.te[i] = m;
+        if (m.after && !run.afterAt) run.afterAt = now() + m.after;
+        if (i !== run.mine) pop(TEAMS[i].ico + (m.team.won ? ' 🏁 ⏱ ' + fmt(m.team.ms) : ' ✖'), TEAMS[i].soft, 34, 3.2);
+        else if (m.team.won) api.sfx('tagwin');
+        setTeams([m.team]);
+        if (mode === 'done') renderDone();
         break;
       case 'obby.flag':
         if (!run) break;
@@ -2058,7 +2409,7 @@
           run.acked = m.i; run.lastClaim = 0;
           if (m.stars) { pop('+' + m.stars + ' ⭐', null, 34); api.sfx(m.ch && m.first ? 'chest' : 'star'); }
           if (m.ch) {          // a chapter is done: the rest platform
-            k = CHAPS[m.ch.k % CHAPS.length];
+            k = chap(tw.id, m.ch.k);
             pop(k.icon + ' ✔' + (m.ch.ms ? '  ⏱ ' + fmt(m.ch.ms) + (m.ch.newBest ? ' ★' : '') : ''), '#D5F3DB', 68, 3.2);
             if (m.old) pop('⏱ 🚩1–12  ' + fmt(m.old.ms) + (m.old.newBest ? ' ★' : ''), '#fff', 102, 3.2);
           }
@@ -2089,7 +2440,7 @@
       case 'obby.res':         // the round is over
         if (!run || run.mode !== m.mode) break;
         run.res = m;
-        if (!run.reached) run.endMs = Math.max(0, now() - run.goAt);
+        if (!run.reached && !run.ended) run.endMs = Math.max(0, now() - run.goAt);
         api.sfx(m.mode === 'race' ? 'goal' : 'tagwin');
         setMode('done'); renderDone();
         break;
@@ -2166,17 +2517,18 @@
 
   // ---------- every frame ----------
   function hudText() {
-    var txt, n, i, a, ch, hearts, tm;
+    var txt, n, i, a, ch, hearts, tm, T;
     if (run.mode === 'rope') {
-      // the team's flags and who stands on the next one · the clock · how high the lowest one on the rope is and how far it is to the next flag
-      tm = teamNow();
-      txt = '🚩 ' + (run.team.flag - run.from) + '/' + (run.end - run.from) + (run.reached ? '' : ' · 🤝 ' + tm.on + '/' + tm.n);
+      // my rope's flags and who stands on the next one · the clock · how high the lowest one on the rope is and how far it is to the next flag
+      tm = teamNow(); T = run.team; n = run.teams[0].n > 0 && run.teams[1].n > 0;
+      txt = (n || run.mine < 0 ? TEAMS[T.i].ico + ' ' : '') + '🚩 ' + (T.flag - T.from) + '/' + (T.end - T.from) + (run.reached || run.spec ? '' : ' · 🤝 ' + tm.on + '/' + tm.n);
       if (run.watch) txt = '👀 ' + txt;
       if (txt !== hud.flag) { hud.flag = txt; els.pf.textContent = txt; }
-      txt = '⏱ ' + (run.res && run.res.ms ? fmt(run.res.ms) : run.reached || run.res ? fmt(run.endMs) : now() > run.goAt ? fmt(now() - run.goAt) : '0:00.0');
+      txt = '⏱ ' + (T.won ? fmt(T.ms) : run.res || run.ended ? fmt(run.endMs) : now() > run.goAt ? fmt(now() - run.goAt) : '0:00.0');
       if (txt !== hud.time) { hud.time = txt; els.pt.textContent = txt; els.pt.hidden = mode === 'lobby'; }
-      a = Math.max(0, Math.round(tm.low / 10)); n = Math.round(-tw.stages[Math.min(run.team.flag + 1, tw.n)].base / 10);
-      txt = '⬆ ' + a + ' m' + (run.reached || n <= a ? '' : ' · 🚩 ' + (n - a) + ' m');
+      a = Math.max(0, Math.round(tm.low / 10)); n = Math.round(-tw.stages[Math.min(T.flag + 1, tw.n)].base / 10);
+      if (run.afterAt && !T.over && !run.res) txt = '⏳ ' + Math.max(0, Math.ceil((run.afterAt - now()) / 1000)) + ' s';       // the other rope is at the top: this long to get there too
+      else txt = '⬆ ' + a + ' m' + (run.reached || n <= a ? '' : ' · 🚩 ' + (n - a) + ' m');
       if (txt !== hud.extra) { hud.extra = txt; els.px.textContent = txt; }
       return;
     }
@@ -2195,7 +2547,7 @@
     else { hearts = ''; for (i = 0; i < run.hearts; i++) hearts += '❤️'; txt = hearts || '💔'; }
     if (txt !== hud.time) { hud.time = txt; els.pt.textContent = txt; els.pt.hidden = !txt || mode === 'lobby'; }
     // the third pill: the chapter, my place, who is still climbing, today's best
-    if (run.mode === 'tower') { ch = tw.stages[Math.min(st.cp, tw.n - 1)].ch; txt = CHAPS[ch % CHAPS.length].icon + ' ' + (ch + 1); }
+    if (run.mode === 'tower') { ch = tw.stages[Math.min(st.cp, tw.n - 1)].ch; txt = chap(tw.id, ch).icon + ' ' + (ch + 1); }
     else if (run.mode === 'race') { txt = run.fin ? placeTxt(run.fin.place) : '🏁 ' + run.n; }
     else if (run.mode === 'lava') { n = 0; a = 0; for (i = 0; i < run.rk.length; i++) { n++; if (!run.rk[i][4]) a++; } txt = '🧗 ' + a + '/' + (n || run.n); }
     else txt = '📅 🚩 ' + Math.max(st.cp, (info && info.me && info.me.endless && info.me.endless.top) || 0);
@@ -2213,7 +2565,7 @@
       if (look && !look.auto && now() - look.last > LOOK_MS) endLook();   // or nobody touched the panel for a while
       if (look && look.id > 0 && !others[look.id]) { if (run.spec) look.id = -1; else endLook(); }   // whoever I looked at is gone
       if (wait || run.dead || now() < run.freeze) inp = ZERO;
-      if (!run.spec && !look) {
+      if (!run.spec && (!look || look.live)) {
         if (run.mode === 'tower' && !run.go && (inp.ax || inp.jump) && mode === 'run') {
           run.go = true;
           if (run.timed && !run.t0) run.t0 = now();
@@ -2247,7 +2599,8 @@
           if (Math.abs(x0) > 1100 * dt + 14 || Math.abs(y0) > 1100 * dt + 14 || run.rp.ev === 2) { run.evx = 0; run.evy = 0; }
           else { run.evx = clamp(x0 / dt, -950, 950); run.evy = clamp(y0 / dt, -950, 950); }
           // under the team's flag with no rope to hold me (a door between us, or nobody left to be tied to): back to that flag
-          if (run.team.flag > 0 && st.y > tw.stages[Math.min(run.team.flag, tw.n)].base + 230 && ropeFree()) ropeHome(false);
+          // (or my rope is at the top already and nobody would send us back together any more)
+          if (run.team.flag > 0 && st.y > tw.stages[Math.min(run.team.flag, tw.n)].base + 230 && (ropeFree() || run.team.over)) ropeHome(false);
         }
       } else if (!run.spec && look && st.on >= 0) {
         // looking away: my player waits (and rides along if it stands on something that moves)
@@ -2325,7 +2678,7 @@
   }
 
   // ---------- drawing ----------
-  var STARS = { e0: 0, e1: 0.5, e2: 0.1, e3: 0.15, e4: 1, h0: 0.25, h1: 1, h2: 0.8, h3: 0.5, h4: 1 };   // how many stars are out at the top of a chapter
+  var STARS = { e0: 0, e1: 0.5, e2: 0.1, e3: 0.15, e4: 1, h0: 0.25, h1: 1, h2: 0.8, h3: 0.5, h4: 1, d0: 0.35, d1: 0.15, d2: 0.9, d3: 0.1, d4: 0.7 };   // how many stars are out at the top of a chapter
   function makeClouds() {
     var p, i, n, range, layer;
     clouds = [];
@@ -2335,7 +2688,7 @@
     }
   }
   function drawSky(t) {
-    var hard = tw.solid, hgt = -(cam.y + vh * 0.6), chs = chapters(tw), k = chapterAt(tw, hgt), C = chs[k], f = clamp((hgt - C.lo) / Math.max(1, C.hi - C.lo), 0, 1);
+    var far = tw.def.far || 0, hard = far === 1, hgt = -(cam.y + vh * 0.6), chs = chapters(tw), k = chapterAt(tw, hgt), C = chs[k], f = clamp((hgt - C.lo) / Math.max(1, C.hi - C.lo), 0, 1);
     var p0 = k ? LOOKS[chs[k - 1].look].sky : tw.def.sky[0], p1 = LOOKS[C.look].sky, kind = LOOKS[C.look].kind;
     var a = clamp(hgt / (chs[1] ? chs[1].hi : tw.height), 0, 6), g, s, x, y, cl, al, fs, fy, i, mul;
     g = c.createLinearGradient(0, 0, 0, ch);
@@ -2347,22 +2700,36 @@
       for (i = 0; i < 36; i++) { c.globalAlpha = al * (0.55 + 0.45 * Math.sin(t * 2 + i * 1.7)); c.beginPath(); c.arc(rnd(i + 1) * cw, rnd(i + 51) * ch * 0.85, 1 + rnd(i + 9) * 1.6, 0, TAU); c.fill(); }
       c.globalAlpha = 1;
     }
-    s = sunSprite(hard); x = cw * 0.8; y = ch * (hard ? 0.34 : 0.1) + a * ch * (hard ? 0.9 : 0.35);
-    if (y < ch) c.drawImage(s, x - 80 * S, y, 160 * S, 160 * S);
-    if (hard && a > 0.35) { y = ch * 0.12 + (1 - a) * ch * 0.2; if (y > -100 * S) { c.globalAlpha = clamp((a - 0.35) / 0.25, 0, 1); s = moonSprite(); c.drawImage(s, cw * 0.14, y, 100 * S, 100 * S); c.globalAlpha = 1; } }
+    if (far === 2) { s = moonSprite(1); c.drawImage(s, cw * 0.13, ch * 0.12 + Math.min(a, 3) * ch * 0.02, 100 * S, 100 * S); }      // the Dragon tower: always night, a red moon
+    else {
+      s = sunSprite(hard); x = cw * 0.8; y = ch * (hard ? 0.34 : 0.1) + a * ch * (hard ? 0.9 : 0.35);
+      if (y < ch) c.drawImage(s, x - 80 * S, y, 160 * S, 160 * S);
+      if (hard && a > 0.35) { y = ch * 0.12 + (1 - a) * ch * 0.2; if (y > -100 * S) { c.globalAlpha = clamp((a - 0.35) / 0.25, 0, 1); s = moonSprite(); c.drawImage(s, cw * 0.14, y, 100 * S, 100 * S); c.globalAlpha = 1; } }
+    }
     if (kind === 'space') { c.globalAlpha = clamp(f * 4, 0, 1); s = planetSprite(); c.drawImage(s, cw * 0.1, ch * 0.2 + f * ch * 0.12, 120 * S, 90 * S); c.globalAlpha = 1; }
     // the land far below sinks slowly as we climb
     fy = ch - (240 + gap - 70) * S + (gap - (cam.y + vh)) * 0.045 * S;
-    if (fy < ch) { fs = farSprite(hard); for (x = ox % (W * S) - W * S; x < cw; x += W * S) c.drawImage(fs, x, fy, W * S, 240 * S); }
+    if (fy < ch) { fs = farSprite(far); for (x = ox % (W * S) - W * S; x < cw; x += W * S) c.drawImage(fs, x, fy, W * S, 240 * S); }
     mul = kind === 'space' ? clamp(1 - f * 5, 0, 1) : 1;      // no clouds in space
     if (mul > 0.02) for (i = 0; i < clouds.length; i++) {
       cl = clouds[i];
       y = ch * 0.5 + (cl.y - (cam.y + vh * 0.5) * cl.p) * S;
       if (y < -90 * S || y > ch) continue;
       x = (cl.x + t * cl.v) % 1200 - 200;
-      s = cloudSprite(cl.k); c.globalAlpha = cl.a * mul; c.drawImage(s, ox + x * S, y, s.lw * cl.s * S, s.lh * cl.s * S);
+      s = cloudSprite(cl.k, far === 2); c.globalAlpha = cl.a * mul * (far === 2 ? 0.7 : 1); c.drawImage(s, ox + x * S, y, s.lw * cl.s * S, s.lh * cl.s * S);
     }
     c.globalAlpha = 1;
+    if (LOOKS[C.look].fire && kind === 'storm') {      // Dragon tower: rain in the storm, sparks from the fire everywhere else
+      c.strokeStyle = 'rgba(190,215,240,0.5)'; c.lineWidth = 1.6; c.beginPath();
+      for (i = 0; i < 34; i++) { y = ((rnd(i + 70) + t * (0.7 + rnd(i + 3) * 0.4)) % 1) * ch; x = (rnd(i + 20) * cw - y * 0.25 + cw) % cw; c.moveTo(x, y); c.lineTo(x - 4, y + 14); }
+      c.stroke();
+    } else if (LOOKS[C.look].fire && kind !== 'crystal') {
+      for (i = 0; i < 22; i++) {
+        y = ch - ((rnd(i + 70) + t * (0.04 + rnd(i + 3) * 0.05)) % 1) * ch; x = (rnd(i + 20) * cw + Math.sin(t * 1.3 + i) * 18 + cw) % cw;
+        c.globalAlpha = 0.35 + rnd(i + 40) * 0.5; c.fillStyle = i % 3 ? '#FF8A3D' : '#FFD23F'; c.beginPath(); c.arc(x, y, 1.4 + rnd(i + 11) * 1.8, 0, TAU); c.fill();
+      }
+      c.globalAlpha = 1;
+    }
     if (kind === 'ice') {      // it snows in the ice chapter
       c.fillStyle = '#fff'; al = Math.min(1, f * 5, (1 - f) * 5 + 0.3);
       for (i = 0; i < 28; i++) {
@@ -2404,14 +2771,18 @@
     if (y1 > -170) { s = doorSprite(LOOKS[chs[0].look].wall); c.drawImage(s, W / 2 - 50, -128, s.lw, s.lh); s = signSprite(); c.drawImage(s, TX0 + 26, -158, s.lw, s.lh); }
   }
   function drawGround(y1) {
-    var i, x;
+    var i, x, fire = tw.def.far === 2;      // (the Dragon tower stands on burnt rock with glowing cracks)
     if (y1 < -8) return;
-    c.fillStyle = '#5DBB72'; c.fillRect(-3000, 5, 6800, y1 + 40);
+    c.fillStyle = fire ? '#4A3642' : '#5DBB72'; c.fillRect(-3000, 5, 6800, y1 + 40);
     c.fillStyle = 'rgba(27,42,73,0.10)'; c.fillRect(-3000, 30, 6800, y1 + 20);
-    c.fillStyle = '#8FE09C'; c.fillRect(-3000, -5, 6800, 10);
+    c.fillStyle = fire ? '#6B5260' : '#8FE09C'; c.fillRect(-3000, -5, 6800, 10);
     c.strokeStyle = NAVY; c.lineWidth = 3; c.beginPath(); c.moveTo(-3000, -5); c.lineTo(3800, -5); c.moveTo(-3000, 5); c.lineTo(3800, 5); c.stroke();
-    c.fillStyle = '#8FE09C';
+    c.fillStyle = fire ? '#6B5260' : '#8FE09C';
     for (i = 0; i < 26; i++) { x = rnd(i + 3) * 800; c.beginPath(); c.arc(x, 5, 6 + rnd(i) * 4, 0, Math.PI); c.fill(); }
+    if (fire) {
+      c.strokeStyle = '#FF7A2E'; c.lineWidth = 3; c.lineCap = 'round'; c.lineJoin = 'round';
+      for (i = 0; i < 9; i++) { x = -60 + rnd(i + 31) * 920; c.beginPath(); c.moveTo(x, 16); c.lineTo(x + 12, 34); c.lineTo(x + 3, 58); c.lineTo(x + 16, 86); c.stroke(); }
+    }
   }
   function line(x0, y0, x1, y1) { c.beginPath(); c.moveTo(x0, y0); c.lineTo(x1, y1); c.stroke(); }
   // what stands on a rest platform: a chest (a heart in the endless tower) and a sign for the chapter that begins here
@@ -2429,7 +2800,7 @@
       c.strokeStyle = NAVY; c.lineWidth = 5; c.lineCap = 'round'; line(sx, y - 1, sx, y - 30);
       rr(c, sx - 18, y - 56, 36, 30, 8); c.fillStyle = '#FFF3D6'; c.fill(); ol(c, 3);
       c.fillStyle = NAVY; c.font = '600 18px ' + api.FONT; c.textAlign = 'center'; c.textBaseline = 'middle';
-      c.fillText(CHAPS[k % CHAPS.length].icon, sx, y - 40);
+      c.fillText(chap(tw.id, k).icon, sx, y - 40);
     }
   }
   function drawGate(F) {      // the finish of a race
@@ -2476,7 +2847,7 @@
   function ropeDraw(n, sag, tight, apart) {
     c.lineCap = 'round'; c.lineJoin = 'round';
     if (apart) {          // let go for now (a door between the two): only a faint dotted line
-      c.globalAlpha = 0.45; c.setLineDash([3, 11]); ropeTrace(n, 0, 0, 0); c.lineWidth = 4; c.strokeStyle = NAVY; c.stroke(); c.setLineDash([]); c.globalAlpha = 1;
+      c.globalAlpha *= 0.45; c.setLineDash([3, 11]); ropeTrace(n, 0, 0, 0); c.lineWidth = 4; c.strokeStyle = NAVY; c.stroke(); c.setLineDash([]);
       return;
     }
     ropeTrace(n, sag, 3, 5); c.strokeStyle = 'rgba(27,42,73,0.15)'; c.lineWidth = 8; c.stroke();
@@ -2485,11 +2856,23 @@
     c.setLineDash([4, 6]); c.strokeStyle = 'rgba(255,255,255,0.6)'; c.lineWidth = 1.7; c.stroke(); c.setLineDash([]);
   }
   // pass 0: the ropes between everybody who is tied (behind the climbers) · pass 1: the knots at their belts (in front)
+  // pass 0: the ropes between everybody who is tied (behind the climbers) · pass 1: the knots at their belts (in front).
+  // Each rope in the colour of its team; the other team's rope a little fainter.
   function drawRopes(pass) {
-    var ch = run.chain, mine = String(api.myId()), L = ropeLen(tw, run.team.flag), i, k, d, n, st2, me, len, pl = api.players(), p, a, b, low;
+    var t;
+    for (t = 0; t < 2; t++) {
+      if (!run.chains[t] || run.chains[t].length < 2) continue;
+      ROPE_COL = TEAMS[t].col; ROPE_HOT = TEAMS[t].hot;
+      drawRope(pass, run.chains[t], t === run.mine && !run.spec, ropeLen(tw, run.teams[t].flag), run.mine >= 0 && t !== run.mine ? 0.62 : 1);
+    }
+    c.globalAlpha = 1;
+  }
+  function drawRope(pass, ch, own, L, alpha) {
+    var mine = String(api.myId()), i, k, d, n, st2, me, len, pl = api.players(), p, a, b, low;
     if (pass === 1) {
+      c.globalAlpha = alpha;
       for (i = 0; i < ch.length; i++) {
-        if (!ropeAt(ch[i], RA) || ch.length < 2) continue;
+        if (!ropeAt(ch[i], RA)) continue;
         p = String(ch[i]) === mine ? api.self() || ME : pl[ch[i]] || ME;
         c.beginPath(); c.arc(RA.x, RA.y, 5.5, 0, TAU); c.fillStyle = ROPE_COL; c.fill(); ol(c, 2.5);
         c.beginPath(); c.arc(RA.x, RA.y, 2, 0, TAU); c.fillStyle = p.color || '#fff'; c.fill();
@@ -2498,8 +2881,9 @@
     }
     for (i = 0; i + 1 < ch.length; i++) {
       if (!ropeAt(ch[i], RA) || !ropeAt(ch[i + 1], RB)) continue;
+      c.globalAlpha = alpha;
       // my own ropes: this tablet knows how they run; a rope between two others is drawn straight from one to the other
-      me = String(ch[i]) === mine ? 1 : String(ch[i + 1]) === mine ? 2 : 0;
+      me = !own ? 0 : String(ch[i]) === mine ? 1 : String(ch[i + 1]) === mine ? 2 : 0;
       k = me ? run.links[me === 1 ? ch[i + 1] : ch[i]] : null;
       d = Math.sqrt((RA.x - RB.x) * (RA.x - RB.x) + (RA.y - RB.y) * (RA.y - RB.y));
       len = k ? k.len : L; st2 = k ? k.st : d - L; n = 2;
@@ -2525,7 +2909,7 @@
       if (pass === 0) {
         if (k === 'wind') drawWind(e, t);
         else if (SOLID[k]) {
-          if ((k === 'v' && st && gone(tw, st, e.i, T)) || (k === 'f' && e.flag === 0)) continue;
+          if ((st && !there(tw, st, e, T)) || (!st && k === 'bl' && !laserOn(e, T)) || (k === 'f' && e.flag === 0)) continue;
           pos(e, T, PB); x = Math.max(TX0 + 2, PB.x + 12); u = Math.min(TX1 - 2, PB.x + e.w + 14);
           if (u > x) { c.fillStyle = 'rgba(27,42,73,0.17)'; c.fillRect(x, PB.y + 16, u - x, 21); c.fillStyle = 'rgba(27,42,73,0.08)'; c.fillRect(x - 2, PB.y + 14, u - x + 4, 25); }
         }
@@ -2551,6 +2935,32 @@
           }
           if (d >= 0 && d < tw.vd) { u = d / tw.vd; x += Math.sin(t * 55) * 2 * u; y += u * 3; c.globalAlpha = 1 - u * 0.55; }
           c.drawImage(s, x - 12, y - 16, s.lw, s.lh); c.globalAlpha = 1;
+        } else if (k === 'k') {
+          // a slab that crumbles: it shakes harder and harder, drops away, and is whole again after a while (a faint outline meanwhile)
+          d = st && st.van[e.i] !== undefined ? T - st.van[e.i] : -1;
+          if (d >= tw.kd && d < tw.kd + KBACK) {
+            u = d - tw.kd;
+            if (u < 0.45) { c.globalAlpha = 1 - u / 0.45; c.drawImage(s, x - 12, y - 16 + 900 * u * u, s.lw, s.lh); }
+            u = tw.kd + KBACK - d;
+            c.globalAlpha = u < 0.5 ? 0.16 + 0.5 * (1 - u / 0.5) : 0.16; c.drawImage(s, x - 12, y - 16, s.lw, s.lh); c.globalAlpha = 1;
+            continue;
+          }
+          if (d >= 0 && d < tw.kd) { u = d / tw.kd; x += Math.sin(t * 60) * (1 + 2.5 * u); y += u * 2; }
+          c.drawImage(s, x - 12, y - 16, s.lw, s.lh);
+        } else if (k === 'bl') {
+          // an ember stone: there for a part of its time (it flickers before it goes out); while it is away a faint
+          // outline stays, and that glows up a moment before the stone is back
+          u = T / e.per + e.ph; u -= Math.floor(u);
+          if (u < e.on) {
+            d = (e.on - u) * e.per;
+            c.fillStyle = 'rgba(255,150,60,0.26)'; rr(c, x - 6, y - 12, e.w + 20, 40, 12); c.fill();
+            if (d < 0.6 && Math.sin(t * 34) < 0) c.globalAlpha = 0.45;
+            c.drawImage(s, x - 12, y - 16, s.lw, s.lh); c.globalAlpha = 1;
+          } else {
+            d = (1 - u) * e.per;
+            c.globalAlpha = d < 0.5 ? 0.2 + 0.5 * (1 - d / 0.5) : 0.2; c.drawImage(s, x - 12, y - 16, s.lw, s.lh); c.globalAlpha = 1;
+            c.strokeStyle = 'rgba(255,190,110,0.75)'; c.lineWidth = 2; c.setLineDash([6, 6]); rr(c, x, y - 5, e.w + 8, 28, 5); c.stroke(); c.setLineDash([]);
+          }
         } else if (k === 'b') {
           d = bounced[e.i] !== undefined ? T - bounced[e.i] : 9;
           u = d < 0.3 ? 1 - 0.45 * Math.sin((d / 0.3) * Math.PI) : 1;
@@ -2569,7 +2979,10 @@
           }
         }
       } else {
-        if (k === 's') {
+        if (k === 'sp') drawSpikes(e, T, t);
+        else if (k === 'fj') drawJet(e, T, t);
+        else if (k === 'lt') drawTide(e, T, t);
+        else if (k === 's') {
           n = e.arms;
           c.beginPath(); c.arc(e.x, e.y, 15, 0, TAU); c.fillStyle = '#8D9AB5'; c.fill(); ol(c, 3);
           c.lineCap = 'round';
@@ -2646,10 +3059,132 @@
             c.beginPath(); c.arc(x, y - 64, 4.5, 0, TAU); c.fillStyle = '#FFD66B'; c.fill(); ol(c, 2.5);
             c.fillStyle = '#fff'; c.font = '700 13px ' + api.FONT; c.textAlign = 'center'; c.textBaseline = 'middle';
             c.fillText(F.flag ? String(F.flag) : '★', x + 13, y - 50 + u * 0.4);
+            // two ropes: a dot in the colour of each rope at the flag it has got to
+            if (run && run.mode === 'rope' && run.teams[0].n && run.teams[1].n) for (j = 0; j < 2; j++) if (run.teams[j].flag === F.flag) { c.beginPath(); c.arc(x - 9 + j * 18, y - 10, 6, 0, TAU); c.fillStyle = TEAMS[j].col; c.fill(); ol(c, 2.5); }
           }
         }
       }
     }
+  }
+  // spikes in the top of a platform: out for a part of their time; a moment before, their tips show and shake.
+  // The red plate they come out of is always there, so the place is known.
+  function drawSpikes(e, T, t) {
+    var u = T / e.per + e.ph, n = Math.max(2, Math.round(e.w / 13)), w = e.w / n, i, h = 0, d, x;
+    u -= Math.floor(u);
+    if (u < e.on) { d = u * e.per; h = d < 0.07 ? 5 + 9 * d / 0.07 : 14; d = (e.on - u) * e.per; if (d < 0.1) h = 14 * Math.max(0.25, d / 0.1); }
+    else if ((1 - u) * e.per < 0.6) h = 4 + Math.sin(t * 50) * 1.2;
+    c.fillStyle = '#FF4F6D'; c.fillRect(e.x, e.y - 3, e.w, 5); c.strokeStyle = NAVY; c.lineWidth = 2; c.lineJoin = 'round'; c.strokeRect(e.x, e.y - 3, e.w, 5);
+    c.fillStyle = NAVY; for (i = 0; i < n; i++) c.fillRect(e.x + (i + 0.5) * w - 1.5, e.y - 2, 3, 3);
+    if (h <= 0) return;
+    c.beginPath();
+    for (i = 0; i < n; i++) { x = e.x + i * w; c.moveTo(x + 1, e.y - 2); c.lineTo(x + w / 2, e.y - 2 - h); c.lineTo(x + w - 1, e.y - 2); c.closePath(); }
+    c.fillStyle = u < e.on ? '#E8EEF7' : '#FFD66B'; c.fill(); ol(c, 2);
+  }
+  // a fire jet: the nozzle is always there and a dotted line shows how far the flame reaches; it sputters before it burns
+  function drawJet(e, T, t) {
+    var u = T / e.per + e.ph, ux = e.ux, uy = e.uy, px = -uy, py = ux, len = 0, d, i, wob, a, soon;
+    u -= Math.floor(u); soon = u >= e.on && (1 - u) * e.per < 0.6;
+    c.lineCap = 'round'; c.lineJoin = 'round';
+    if (u < e.on) len = e.len * Math.min(1, u * e.per / 0.08);
+    else if (soon) len = 13 + 9 * Math.abs(Math.sin(t * 28));
+    if (u >= e.on) { c.strokeStyle = 'rgba(255,170,80,0.5)'; c.lineWidth = 2.5; c.setLineDash([3, 10]); line(e.x, e.y, e.x + ux * e.len, e.y + uy * e.len); c.setLineDash([]); }
+    if (len > 0) {
+      wob = Math.sin(t * 40) * 1.5;
+      for (i = 0; i < 3; i++) {       // three flames in each other: orange, yellow, white
+        a = (i === 0 ? 11 : i === 1 ? 7 : 3) + (i < 2 ? wob : 0); d = len * (i === 0 ? 1 : i === 1 ? 0.86 : 0.66);
+        c.beginPath(); c.moveTo(e.x + px * a, e.y + py * a);
+        c.quadraticCurveTo(e.x + ux * d * 0.6 + px * a * 1.25, e.y + uy * d * 0.6 + py * a * 1.25, e.x + ux * d, e.y + uy * d);
+        c.quadraticCurveTo(e.x + ux * d * 0.6 - px * a * 1.25, e.y + uy * d * 0.6 - py * a * 1.25, e.x - px * a, e.y - py * a);
+        c.closePath(); c.fillStyle = i === 0 ? '#FF6A2B' : i === 1 ? '#FFC233' : '#FFF6C8'; c.fill();
+        if (i === 0) { c.strokeStyle = NAVY; c.lineWidth = 2.5; c.stroke(); }
+      }
+    }
+    c.save(); c.translate(e.x, e.y); c.rotate(Math.atan2(uy, ux));
+    rr(c, -13, -11, 15, 22, 4); c.fillStyle = '#56617A'; c.fill(); ol(c, 2.5);
+    c.fillStyle = u < e.on ? '#FF6A2B' : soon ? '#FFD66B' : '#2A3350'; c.fillRect(-1, -6, 3.5, 12);
+    c.restore();
+  }
+  // a lava pool that rises and sinks: the lava, a dotted line at the height it rises to, and an arrow for the way it is going
+  function drawTide(e, T, t) {
+    var x = e.x, w = e.w, i, n = Math.max(4, Math.round(w / 26)), px, y, up;
+    pos(e, T, PB); y = PB.y; up = Math.sin(TAU * (T / e.per + e.ph)) > 0;
+    c.lineJoin = 'round'; c.lineCap = 'round';
+    c.strokeStyle = 'rgba(255,200,110,0.7)'; c.lineWidth = 2.5; c.setLineDash([8, 9]); line(x + 3, e.y - e.amp, x + w - 3, e.y - e.amp); c.setLineDash([]);
+    c.fillStyle = 'rgba(255,150,40,0.16)'; c.fillRect(x, y - 16, w, 18);
+    c.beginPath(); c.moveTo(x, e.bot); c.lineTo(x, y + 4);
+    for (i = 0; i <= n; i++) c.lineTo(x + w * i / n, y + 2 + Math.sin(t * 2.6 + i * 1.3 + x) * 2.5);
+    c.lineTo(x + w, e.bot); c.closePath();
+    c.globalAlpha = 0.92; c.fillStyle = '#F2541B'; c.fill(); c.globalAlpha = 1; ol(c, 3);
+    c.beginPath(); c.moveTo(x + 2, y + 9);
+    for (i = 0; i <= n; i++) c.lineTo(x + 2 + (w - 4) * i / n, y + 3 + Math.sin(t * 2.6 + i * 1.3 + x) * 2.5);
+    c.lineTo(x + w - 2, y + 9); c.closePath(); c.fillStyle = '#FFC233'; c.fill();
+    if (e.bot - y > 42) { c.fillStyle = 'rgba(120,20,10,0.25)'; c.fillRect(x + 1.5, y + 40, w - 3, e.bot - y - 41.5); }
+    c.fillStyle = '#FFE680';
+    for (i = 0; i < 5; i++) { px = (t * 0.6 + rnd(i * 9.3 + x)) % 1; c.globalAlpha = 1 - px; c.beginPath(); c.arc(x + 10 + rnd(i * 5.1 + x) * (w - 20), y + 2 - px * 18, 2 + px * 3, 0, TAU); c.fill(); }
+    c.globalAlpha = 1;
+    // rising or sinking: an arrow at each end of the pool
+    for (i = 0; i < 2; i++) { px = i ? x + w - 22 : x + 22; tri(c, px, y - 22 + Math.sin(t * 6) * 2 * (up ? -1 : 1), 9, up ? -Math.PI / 2 : Math.PI / 2, up ? '#FF4F6D' : '#FFD66B'); }
+  }
+  // The dragon of the Dragon Tower lies on top of the wall and looks down at whoever comes up: horns and teeth, but all it
+  // blows is smoke rings, and it smiles at whoever makes it to the top. (Drawn in front of the wall, behind platforms and climbers.)
+  function drawDragon(t) {
+    var W0 = tw.top - 150, hx = 676 + Math.sin(t * 0.8) * 5, hy = 60 + Math.sin(t * 1.6) * 4, RED = '#E2483A', DARK = '#B3352C', BELLY = '#FFD08A', i, a, u, px, py, ex = 4, ey = -10, d, happy = !!st && st.cp >= tw.n;
+    c.save(); c.translate(0, W0); c.lineJoin = 'round'; c.lineCap = 'round';
+    // the tail hangs down the left side of the tower and sways
+    a = Math.sin(t * 1.3) * 10;
+    c.beginPath(); c.moveTo(200, -6); c.bezierCurveTo(120, 0, 96 + a, 70, 128 + a, 120);
+    c.strokeStyle = NAVY; c.lineWidth = 30; c.stroke(); c.strokeStyle = RED; c.lineWidth = 23; c.stroke();
+    poly(c, [128 + a, 106, 102 + a, 150, 130 + a, 138, 158 + a, 154]); c.fillStyle = '#FF8A4D'; c.fill(); ol(c, 3.5);
+    // the wing on its back, folded
+    poly(c, [330, -52, 262, -150, 300, -112, 352, -168, 372, -116, 436, -150, 430, -56]); c.fillStyle = '#FF9A5A'; c.fill(); ol(c, 3.5);
+    c.strokeStyle = DARK; c.lineWidth = 4; c.beginPath(); c.moveTo(336, -56); c.lineTo(262, -150); c.moveTo(364, -58); c.lineTo(352, -168); c.moveTo(400, -58); c.lineTo(436, -150); c.stroke();
+    // the neck comes round the right side of the tower
+    c.beginPath(); c.moveTo(520, -30); c.quadraticCurveTo(700, -70, hx + 6, hy - 22);
+    c.strokeStyle = NAVY; c.lineWidth = 56; c.stroke(); c.strokeStyle = RED; c.lineWidth = 49; c.stroke();
+    c.beginPath(); c.moveTo(540, -12); c.quadraticCurveTo(690, -44, hx - 6, hy - 18); c.strokeStyle = BELLY; c.lineWidth = 15; c.stroke();
+    // the body lies on the wall
+    c.beginPath(); c.moveTo(180, 20); c.bezierCurveTo(170, -70, 300, -84, 380, -80); c.bezierCurveTo(470, -84, 590, -66, 572, 18); c.bezierCurveTo(560, 44, 200, 46, 180, 20); c.closePath();
+    c.fillStyle = RED; c.fill(); ol(c, 4);
+    c.save(); c.clip();
+    c.fillStyle = BELLY; c.fillRect(170, 14, 420, 40); c.fillStyle = 'rgba(27,42,73,0.16)'; c.fillRect(470, -90, 120, 140);
+    c.strokeStyle = 'rgba(160,90,40,0.5)'; c.lineWidth = 2.5; c.beginPath(); for (i = 200; i < 580; i += 28) { c.moveTo(i, 14); c.lineTo(i, 46); } c.stroke();
+    c.restore();
+    // spikes along its back
+    for (i = 0; i < 7; i++) { px = 226 + i * 50; py = -66 - Math.sin((i + 0.5) / 7 * Math.PI) * 16; poly(c, [px - 13, py + 8, px + 2, py - 20, px + 15, py + 8]); c.fillStyle = '#FFB84D'; c.fill(); ol(c, 3); }
+    // a paw over the edge of the wall
+    for (i = 0; i < 3; i++) {
+      c.beginPath(); c.ellipse(596 + i * 15, 30, 9, 13, 0, 0, TAU); c.fillStyle = RED; c.fill(); ol(c, 3);
+      poly(c, [591 + i * 15, 40, 596 + i * 15, 54, 601 + i * 15, 40]); c.fillStyle = '#FFF3D6'; c.fill(); ol(c, 2);
+    }
+    // the head: it looks at the climber
+    c.translate(hx, hy); c.rotate(-0.12 + Math.sin(t * 0.8) * 0.04);
+    poly(c, [16, -30, 34, -66, 40, -26]); c.fillStyle = '#FFF3D6'; c.fill(); ol(c, 3.5);
+    poly(c, [-4, -34, 4, -70, 18, -32]); c.fillStyle = '#FFF3D6'; c.fill(); ol(c, 3.5);
+    c.beginPath(); c.ellipse(4, 0, 46, 36, 0, 0, TAU); c.fillStyle = RED; c.fill(); ol(c, 4);
+    c.beginPath(); c.ellipse(-42, 14, 34, 24, 0.12, 0, TAU); c.fillStyle = RED; c.fill(); ol(c, 4);
+    c.beginPath(); c.ellipse(-12, 6, 30, 22, 0, 0, TAU); c.fillStyle = RED; c.fill();
+    c.beginPath(); c.ellipse(-40, 24, 26, 10, 0.12, 0, Math.PI); c.fillStyle = BELLY; c.fill();
+    // nostrils, and smoke rings
+    c.fillStyle = NAVY; c.beginPath(); c.ellipse(-62, 4, 3.5, 5, 0.3, 0, TAU); c.ellipse(-50, 1, 3.5, 5, 0.3, 0, TAU); c.fill();
+    c.strokeStyle = '#E8EEF7'; c.lineWidth = 4;
+    for (i = 0; i < 3; i++) { u = (t * 0.45 + i / 3) % 1; c.globalAlpha = (1 - u) * 0.7; c.beginPath(); c.arc(-64 - u * 26, -6 - u * 44, 5 + u * 9, 0, TAU); c.stroke(); }
+    c.globalAlpha = 1;
+    // a grin with two small teeth (a big smile for whoever made it to the top)
+    c.strokeStyle = NAVY; c.lineWidth = 3.5; c.beginPath(); c.moveTo(-70, 22); c.quadraticCurveTo(-40, happy ? 46 : 34, -6, 22); c.stroke();
+    poly(c, [-58, 25, -53, 35, -48, 27]); c.fillStyle = '#fff'; c.fill(); ol(c, 2);
+    poly(c, [-30, 29, -25, 38, -20, 28]); c.fillStyle = '#fff'; c.fill(); ol(c, 2);
+    // the eye (it blinks)
+    if (t % 4.2 < 0.14) { c.strokeStyle = NAVY; c.lineWidth = 4; c.beginPath(); c.moveTo(ex - 13, ey); c.lineTo(ex + 13, ey); c.stroke(); }
+    else {
+      c.beginPath(); c.ellipse(ex, ey, 14, 15, 0, 0, TAU); c.fillStyle = '#fff'; c.fill(); ol(c, 3);
+      d = st ? Math.atan2(st.y - 30 - (W0 + hy + ey), st.x - (hx + ex)) + 0.12 : 2.6;
+      px = ex + Math.cos(d) * 5; py = ey + Math.sin(d) * 5;
+      c.beginPath(); c.ellipse(px, py, 8, 9, 0, 0, TAU); c.fillStyle = '#FFC233'; c.fill(); ol(c, 2);
+      c.beginPath(); c.ellipse(px, py, 2.6, 7, 0, 0, TAU); c.fillStyle = NAVY; c.fill();
+      c.beginPath(); c.arc(px - 3, py - 4, 2.2, 0, TAU); c.fillStyle = '#fff'; c.fill();
+    }
+    c.strokeStyle = NAVY; c.lineWidth = 4.5; c.beginPath(); c.moveTo(ex - 16, ey - 19 - (happy ? 4 : 0)); c.lineTo(ex + 14, ey - 22); c.stroke();
+    c.restore();
   }
   function drawLava(e, t) {
     var x = e.x, y = e.y, w = e.w, h = e.h, i, n = Math.max(3, Math.round(w / 14)), px;
@@ -2706,13 +3241,13 @@
     c.globalAlpha = 1;
   }
   var ME = { color: '#FF7A45', hat: 0, big: false, name: '', lv: 0 }, GH = { x: 0, y: 0, f: 1, m: 0 };
-  function drawGuy(p, x, y, f, m, t, sq, isMe, noTag) {
+  function drawGuy(p, x, y, f, m, t, sq, isMe, noTag, team) {
     var h;
     c.save(); c.translate(x, y);
     if (sq) c.scale(1 + sq * 0.2, 1 - sq * 0.2);
     h = api.drawAvatar(c, p, 0, 0, t, { scale: AV, facing: f, moving: m === 1 });
     c.restore();
-    if (!noTag) tags.push({ p: p, x: x, y: y - h - 5, me: isMe });
+    if (!noTag) tags.push({ p: p, x: x, y: y - h - 5, me: isMe, team: team === 0 || team === 1 ? team : -1 });
     return h;
   }
   // the soft shadow under the player: on the platform below, smaller the higher the jump
@@ -2723,7 +3258,7 @@
       list = tw.stages[si].list;
       for (i = 0; i < list.length; i++) {
         e = tw.ents[list[i]];
-        if (!SOLID[e.k] || (e.k === 'v' && gone(tw, st, e.i, T))) continue;
+        if (!SOLID[e.k] || !there(tw, st, e, T)) continue;
         pos(e, T, PB);
         if (st.x > PB.x - 6 && st.x < PB.x + e.w + 6 && PB.y >= st.y - 2 && PB.y < y) y = PB.y;
       }
@@ -2775,6 +3310,21 @@
   // a race or a lava round as it stands: who is first, who is out
   function drawRank() {
     var rk = run.rk || [], list = [], i, o, id = api.myId(), y = 76, txt, w, mine, race = run.mode === 'race', fs = cw < 1000 ? 15 : 17, hgt = fs + 10;
+    c.font = '600 ' + fs + 'px ' + api.FONT; c.textAlign = 'left'; c.textBaseline = 'middle';
+    if (run.mode === 'rope') {
+      // two ropes: how far each one is (the one that is first at the top on top); with one rope only for whoever watches
+      for (i = 0; i < 2; i++) if (run.teams[i].n) list.push(run.teams[i]);
+      if (list.length < 2 && run.mine >= 0) return;
+      list.sort(function (a, b) { return (a.place || 9) - (b.place || 9) || b.flag - a.flag; });
+      for (i = 0; i < list.length; i++) {
+        o = list[i]; txt = TEAMS[o.i].ico + '  🚩 ' + (o.flag - o.from) + '/' + (o.end - o.from) + (o.won ? '  🏁 ' + fmt(o.ms) : o.over ? '  ✖' : '');
+        w = c.measureText(txt).width + 20;
+        rr(c, 12, y, w, hgt, hgt / 2); c.fillStyle = o.i === run.mine ? '#FFD66B' : o.over && !o.won ? 'rgba(214,220,232,0.88)' : 'rgba(255,255,255,0.9)'; c.fill(); c.lineWidth = 2.5; c.strokeStyle = NAVY; c.stroke();
+        c.fillStyle = NAVY; c.fillText(txt, 22, y + hgt / 2 + 1);
+        y += hgt + 4;
+      }
+      return;
+    }
     for (i = 0; i < rk.length; i++) {
       o = rk[i]; mine = String(o[0]) === String(id);
       list.push({ name: o[1], flag: o[2], fin: o[3], out: o[4], m: o[5], me: mine, h: mine && !run.spec ? -st.y : others[o[0]] ? -others[o[0]].y : -tw.stages[clamp(o[2], 0, tw.n)].base });
@@ -2782,7 +3332,6 @@
     if (list.length < 2 && !run.ghost) return;
     list.sort(function (a, b) { return race ? ((a.fin || 1e12) - (b.fin || 1e12)) || (a.out - b.out) || (b.h - a.h) : (a.out - b.out) || (a.out ? b.m - a.m : b.h - a.h); });
     if (run.ghost) list.push({ ghost: true });
-    c.font = '600 ' + fs + 'px ' + api.FONT; c.textAlign = 'left'; c.textBaseline = 'middle';
     for (i = 0; i < list.length && i < 9; i++) {
       o = list[i];
       if (o.ghost) txt = '👻  ⏱ ' + fmt(run.ghost.ms);
@@ -2802,6 +3351,7 @@
     c.lineJoin = 'round';
     y0 = cam.y - 40; y1 = cam.y + vh + 40;
     drawWall(y0, y1);
+    if (tw.def.far === 2 && tw.top - 330 < y1 && tw.top + 20 > y0) drawDragon(t);
     drawGround(y1);
     for (i = 0; i <= tw.n; i++) {
       stg = tw.stages[i];
@@ -2814,12 +3364,15 @@
     }
     if (st && run) {
       if (run.mode === 'rope') drawRopes(0);
-      c.globalAlpha = run.mode === 'rope' ? 1 : 0.72;      // (the others on my rope are as solid as I am)
       for (id in others) {
         o = others[id]; p = pl[id];
         if (!p || o.y < y0 - 40 || o.y > y1 + 80) continue;
-        drawGuy(p, o.x, o.y, o.f, o.m, t, 0, false);
+        // (the others on my rope are as solid as I am; the other rope is a little fainter, like everybody in the other ways to play)
+        d = run.mode === 'rope' ? run.tmOf[id] : -1;
+        c.globalAlpha = run.mode === 'rope' && (run.mine < 0 || d === run.mine) ? 1 : 0.72;
+        drawGuy(p, o.x, o.y, o.f, o.m, t, 0, false, false, d);
       }
+      c.globalAlpha = 0.72;
       // alone in a race: the ghost of my best race runs along
       if (run.ghost && run.ghost.s && run.goAt && now() > run.goAt && ghostAt(run.ghost, now() - run.goAt, GH)) {
         c.globalAlpha = 0.38; d = drawGuy(me, GH.x, GH.y, GH.f, GH.m, t, 0, false, true); gy = GH.y - d - 4;
@@ -2828,8 +3381,8 @@
       if (!run.spec) {
         drawShadow(T);
         if (flash > 0) c.globalAlpha = 0.55 + 0.45 * Math.sin(t * 40);
-        else if (look) c.globalAlpha = 0.6 + 0.2 * Math.sin(t * 5);       // I am looking away: my player waits
-        drawGuy(me, st.x, st.y, st.f, st.on >= 0 && Math.abs(st.vx) > 30 && !look ? 1 : 0, t, squash, true);
+        else if (look && !look.live) c.globalAlpha = 0.6 + 0.2 * Math.sin(t * 5);       // I am looking away: my player waits
+        drawGuy(me, st.x, st.y, st.f, st.on >= 0 && Math.abs(st.vx) > 30 && (!look || look.live) ? 1 : 0, t, squash, true, false, run.mode === 'rope' ? run.mine : -1);
         c.globalAlpha = 1;
       }
       if (run.mode === 'rope') drawRopes(1);
@@ -2848,7 +3401,12 @@
     for (i = 0; i < tags.length; i++) {
       o = tags[i]; if (!o.p.name) continue;
       sx = ox + o.x * S; sy = (o.y - cam.y) * S;
-      c.save(); c.translate(sx, sy); c.scale(sc, sc); api.nameTag(c, o.p, 0, 0, o.me); c.restore();
+      c.save(); c.translate(sx, sy); c.scale(sc, sc);
+      if (TEAMS[o.team]) {      // Rope Team: the name in the colour of the rope (my own with a star)
+        if (run && run.mine >= 0 && o.team !== run.mine) c.globalAlpha = 0.8;
+        api.label(c, (o.me ? '★ ' : '') + o.p.name, 0, 0, TEAMS[o.team].col, '#fff', 18);
+      } else api.nameTag(c, o.p, 0, 0, o.me);
+      c.restore();
     }
     if (gy !== null) api.label(c, '👻', ox + GH.x * S, (gy - cam.y) * S, '#fff', NAVY, cw < 1000 ? 15 : 17);
     for (i = 0; i < pops.length; i++) {
@@ -2862,7 +3420,7 @@
         if (d > 0 && lavaLevel() > cam.y + vh) { o = c.createLinearGradient(0, ch - 90, 0, ch); o.addColorStop(0, 'rgba(255,90,30,0)'); o.addColorStop(1, 'rgba(255,90,30,' + (0.55 * d * (0.75 + 0.25 * Math.sin(t * 6))).toFixed(3) + ')'); c.fillStyle = o; c.fillRect(0, ch - 90, cw, 90); }
       }
       drawPanel();
-      if (run.mode === 'race' || run.mode === 'lava') drawRank();
+      if (run.mode === 'race' || run.mode === 'lava' || run.mode === 'rope') drawRank();
       if (run.count) {
         fs = Math.round(Math.min(ch * 0.34, cw * 0.2));
         c.font = '700 ' + fs + 'px ' + api.FONT; c.textAlign = 'center'; c.textBaseline = 'middle'; c.lineJoin = 'round';
@@ -2879,13 +3437,13 @@
     onMessage: onMessage,
     onPlayers: function () { if (root && mode === 'lobby') renderLobby(); },
     // for the test bot (scratch tests load this file in Node and play the stages)
-    _sim: { TOWERS: TOWERS, tower: tower, dayTower: dayTower, genTower: genTower, build: build, step: step, spawn: spawn, newState: newState, pos: pos, consts: { G: G, JUMP: JUMP, RUN: RUN, COYOTE: COYOTE },
+    _sim: { TOWERS: TOWERS, TOWER_IDS: TOWER_IDS, tower: tower, dayTower: dayTower, genTower: genTower, build: build, step: step, spawn: spawn, newState: newState, pos: pos, there: there, consts: { G: G, JUMP: JUMP, RUN: RUN, COYOTE: COYOTE },
       rope: { ROPE: ROPE, ROPT: ROPT, before: ropeBefore, after: ropeAfter, newRope: newRope, newLink: newLink, say: linkSay, len: ropeLen, stageOf: stageOf, G: RB_G, HOLD: RB_HOLD, PULL: RB_PULL, SUP: RB_SUP } },
     // for the tests in the browser: what the screen is doing right now
     _dbg: function () {
       return { mode: mode, tab: tab, camY: cam.y, vh: vh, gap: gap, look: look ? { id: look.id, auto: look.auto } : null, others: Object.keys(others),
         st: st ? { x: st.x, y: st.y, cp: st.cp, on: st.on } : null,
-        rope: run && run.mode === 'rope' ? { team: run.team, chain: run.chain.slice(), bits: run.rp.bits, hold: rkeys.hold, pull: rkeys.pull,
+        rope: run && run.mode === 'rope' ? { team: run.team, teams: run.teams, mine: run.mine, size: run.size, ended: !!run.ended, chain: run.chain.slice(), chains: run.chains, bits: run.rp.bits, hold: rkeys.hold, pull: rkeys.pull,
           links: Object.keys(run.links).map(function (id) { var k = run.links[id]; return { id: id, d: Math.round(k.d), len: Math.round(k.len), st: Math.round(k.st), reel: Math.round(k.reel), ext: Math.round(k.ext), wrap: k.wrap, apart: k.apart }; }) } : null,
         run: run ? { mode: run.mode, tower: run.tower, from: run.from, end: run.end, acked: run.acked, spec: run.spec, out: run.out, reached: run.reached, hearts: run.hearts, n: run.n, rec: run.rec.length, ghost: run.ghost ? run.ghost.ms : 0 } : null };
     }
