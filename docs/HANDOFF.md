@@ -109,6 +109,16 @@ Sections 4 to 7 describe release v1. This is what changed in Claude Code on the 
 - **v4 (released):** everything in the list above.
 - **v5 (released, live):** pinch zoom of the town and the town map (`map.js`): mini map, big map with each person's area, guide arrow.
 
+### Three games made deeper (2026-11-16, in `dev/`, see git log for whether it is released)
+
+After a day of play the owner asked for more: "12 level is not enough" and more modes in the tower, "monopoly too simple", and racing that is "only straight lane".
+
+- **Obby Tower:** 30 stages per tower in five chapters, plus Race, Rising lava and a daily Endless tower; the edge panel scrolls the view and follows other players (the owner asked to be able to check the others' progress). Old best times are kept as the record for stages 1 to 12.
+- **Monopoly:** the old game stays as the Quick game; a Big game adds a 36-space board, two dice, building levels, auctions, swaps, mortgages, card decks and town events.
+- **Race Track:** circuit racing from behind the car with bends, items, drifting, Grand Prix and Time Trial; the old sprint stays as the Sprint mode.
+- Each was built by its own agent in its two module files only. Tests: obby 131 checks, monopoly 359, race 177, all passing; the new code was also run against a copy of the live save and every record survived.
+- Reviewed in a desktop browser. Not seen on a tablet, and no full game or Grand Prix was played by a person. Known: robots in the Big game propose only one kind of swap; the Nap corner sits 10 spaces from Start; with gentle robots and Easy steering the race is very easy.
+
 ### A boy in Dress-Up (finished 2026-11-16, in `dev/`, see git log for whether it is released)
 
 The owner asked for a boy to choose in Dress-Up. The work was paused once on his request and resumed the next day.

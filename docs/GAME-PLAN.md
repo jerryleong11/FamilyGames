@@ -46,10 +46,10 @@ Saves (name, look, car, stars, gallery) live on the laptop, so progress survives
 | Building | Game |
 |---|---|
 | **Pet Home (养宠物)** | Buy eggs, hatch them by earning stars, about 14 pets with rarity, feed / play / wash, pets grow and follow you in town, a collection book, trading. |
-| **Race Track** | Side-view lane racing with the cars from the Car Garage; robots fill the grid; three tracks; best times. |
-| **Obby Tower** | A jumping obstacle tower in an Easy and a Hard version, with checkpoints and best times. |
+| **Race Track** | Circuit racing seen from behind the car on roads that bend and rise: 4 circuits, 3 laps, 8 racers with robots, drifting, item boxes with seven original items, a mini map. Modes: Race, Grand Prix, Time Trial against your ghost, and the original side-view Sprint. |
+| **Obby Tower** | A jumping obstacle tower in an Easy and a Hard version, each 30 stages in five chapters (Garden, Castle, Ice, Clouds, Space). Modes: Climb, Race, Rising lava, and an Endless tower that is new every day. The edge panel shows where everyone is and lets you scroll or follow them. |
 | **Monster Cave** | Co-op boss fight: carry number orbs to the cannon so they add up to the number on the boss's shield. Three bosses, three difficulties. |
-| **Monopoly (大富翁)** | A 24-space town board, robots, paying rent with notes and getting change, 10 rounds. |
+| **Monopoly (大富翁)** | Quick game: a 24-space town board, one die, 10 rounds. Big game: 36 spaces, two dice with doubles, four building levels, auctions, swaps, mortgages, two card decks, town events, 15 to 30 rounds. Both: robots, paying with notes and getting change. |
 | **Escape Room** | Four rooms per run from ten puzzle kinds; each tablet holds different clues, so the family has to talk. |
 | **Home Street** | Your own house and garden: buy and place items, visit each other, give hearts. |
 
