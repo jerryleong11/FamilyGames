@@ -110,6 +110,7 @@ Sections 4 to 7 describe release v1. This is what changed in Claude Code on the 
 - **v5 (released):** pinch zoom of the town and the town map (`map.js`): mini map, big map with each person's area, guide arrow.
 - **v6 (released 2026-11-16):** the three deeper games and the boy in Dress-Up (both below).
 - **v7 (released 2026-11-16, live from the next start of the live server):** Rope Team in the Obby Tower, the version label and Rocket Base (all below). The frozen copy was run against a copy of the live save: every record survived and all eight games opened. Not yet played on the tablets.
+- **v8 (released 2026-11-16, late evening):** the Rocket Base cards with a Captain, and in the Obby Tower the rope size with two teams, the rebuilt Hard Tower and the Dragon Tower (all below). The frozen copy was run against a copy of the live save: stars, shop items, looks and reached flags unchanged for all three players, their old Hard times and the three old Hard board rows set aside under `old.hard.v1`, all eight games opened. A copy of the save from just before the first start of v8 is kept on the laptop as `data/backup-before-v8/save.json` (ignored by git, like every save). Do not roll back to v7 without need: v7 would put times made on the old Hard layouts into the fresh Hard fields. Not yet played on the tablets.
 
 ### Three games made deeper (2026-11-16, in `dev/`, see git log for whether it is released)
 
