@@ -3,6 +3,17 @@
 //   Hands  the only one who may press the controls, but sees them as plain grey shapes   (station.pub)
 //   Eyes   sees the colours, symbols, numbers and lights of the panel, cannot press       (station.eye)
 //   Book   has the picture rules of this mission, cannot see the panel                    (station.page)
+// One player trains with all three parts, two play Hands and Eyes + Book. From three players on the parts are
+// cards, each with one way to pass things on (a tablet cannot stop anybody talking: the family keeps to its card):
+//   Talker   is Book: the only one who may talk
+//   Seer     is Eyes: silent, puts picture chips on a message line and points at a control
+//   Sender   is Hands: silent, puts ready-made words on a message line
+//   Captain  (four or more players) turns the crew to a station and gives the turn to press, may talk.
+//            Gets the grey panel, the clock and the message lines: never station.eye, never a page.
+// With a Captain only the holder of the turn can press: a Sender on grey shapes, a Talker on grey shapes next to
+// the book (station.pub only while holding the turn), a Seer on the panel they see. Nobody gets two stations in a
+// row, and a turn nobody holds for TURN_MS is given by the server. A quiet mission with three or more players is
+// "radio silence": the Talker uses the picture chips too.
 // A mission is 1 to 6 stations taken from 9 kinds, with new values every time. The answer of a station
 // (station.sol) stays here: every press is checked on the server and nothing here trusts a tablet.
 //
@@ -16,12 +27,33 @@ module.exports = function (api) {
   const TIME_SCALE = envNum('ROCKET_TIME_SCALE', 1);      // tests only: shorter countdowns
   const STALE_MS = envNum('ROCKET_STALE_MS', 60000);      // a mission with nobody in the room is dropped after this long
   const LOCK_MS = envNum('ROCKET_LOCK_MS', 450);          // after a spark the panel takes no press for a moment
+  const TURN_MS = envNum('ROCKET_TURN_MS', 6000);         // with a Captain: a turn nobody holds for this long is given by the server
+  const LINE_MS = envNum('ROCKET_LINE_MS', 5000);         // a pause this long starts a new message line
+  const LINE_MAX = 6, LINE_KEEP = 45000;                  // chips on one line; outside the countdown a line nobody adds to is dropped after this long
+  const SIG_MS = 150, POINT_MS = 400, GIVE_MS = 300;      // the least time between two chips, two points, two turns given
   const REP_CAP = 5;                                      // repeat launches a day that pay in full; after that 1 star
   const KINDS = ['order', 'hose', 'dial', 'switch', 'grid', 'cells', 'blink', 'cargo', 'wheels'];
   const FACETS = ['col', 'sym', 'num', 'lit'];            // what an Eyes can be given: colours, symbols, numbers, lights
   const FGROUP = { 2: [['col', 'lit'], ['sym', 'num']], 3: [['col', 'lit'], ['sym'], ['num']], 4: [['col'], ['sym'], ['num'], ['lit']] };
   const SPARK_S = [4, 5, 6];                              // seconds a spark costs, by destination
   const FIRST = [3, 4, 5];                                // bonus stars for the first launch of a mission, by destination
+  // The chips of a message line, as kind -> [lowest, highest]. Pictures: colour, symbol, number, arrow, yes / no, planet.
+  // Words (the Sender): which one? again, wait, done, faster, help; yes / no; the numbers 1 to 6.
+  const PIC = { c: [0, 5], s: [0, 5], n: [0, 9], a: [0, 3], y: [0, 1], p: [0, 5] };
+  const WORD = { w: [0, 5], y: [0, 1], n: [1, 6] };
+  // The controls of a station that can be pointed at, from its pub: name -> how many there are (0: just the one)
+  const CTL = {
+    order: function (pub) { return { b: pub.n }; },
+    hose: function (pub) { return { tk: pub.n, so: pub.n }; },
+    dial: function () { return { up: 0, dn: 0, set: 0 }; },
+    switch: function (pub) { return { sw: pub.n, set: 0 }; },
+    grid: function (pub) { return { c: pub.nx * pub.ny }; },
+    cells: function (pub) { return { ce: pub.n, set: 0 }; },
+    blink: function (pub) { return { k: pub.n }; },
+    cargo: function () { return { pk: 3 }; },
+    wheels: function (pub) { return { w: pub.n, set: 0 }; }
+  };
+  function own(o, k) { return Object.prototype.hasOwnProperty.call(o, k); }
   // tests only: ROCKET_KINDS=order,hose fixes the kinds of the stations, ROCKET_LV=2 their level, ROCKET_QUIET=1/0 the quiet card
   const FORCE = String(env.ROCKET_KINDS || '').split(',').filter(function (k) { return KINDS.indexOf(k) >= 0; });
   const FORCE_LV = envNum('ROCKET_LV', 0);
@@ -60,11 +92,12 @@ module.exports = function (api) {
   function payOf(stations) { return Math.round(2 + 1.6 * stations); }   // 1 station 4 stars ... 6 stations 12 stars
 
   let run = null;            // the mission everybody in the room shares, or null in the lobby
-  let clock = null, briefTimer = null, staleTimer = null;
+  let clock = null, briefTimer = null, staleTimer = null, turnTimer = null;
   let seats = [];            // keys in the order the players came in: the parts go round in this order
-  const pref = {};           // key -> 'hands' | 'eyes' | 'book' (nothing: any part)
-  const sigAt = {};          // key -> when that player last used the signal board
-  let lastHands = null;      // who was Hands in the mission before
+  const pref = {};           // key -> 'hands' | 'eyes' | 'book' | 'cap' (nothing: any part)
+  const sigAt = {}, pointAt = {}, giveAt = {};   // key -> when that player last sent a chip, pointed, gave the turn
+  const lines = {};          // key -> { chips: [[kind, value], ...], at: when the last chip came }: the message lines
+  let lastHands = null, lastCap = null;   // who was Hands, and who was Captain, in the mission before
 
   // ---------- small helpers ----------
   function range(n) { const a = []; for (let i = 0; i < n; i++) a.push(i); return a; }
@@ -332,18 +365,37 @@ module.exports = function (api) {
     return list;
   }
   function crewHere() { return here().filter(function (p) { return run.crew.indexOf(p.key) >= 0; }); }
-  // Who is Hands, who is Eyes, who is Book. `rot` goes up every mission, so with nobody choosing everyone gets every part.
-  // `prev` and `hands` are the parts of this mission so far: when somebody comes or goes the others keep theirs where they can.
-  function assign(keys, rot, prev, hands) {
+  // Who is Hands (Sender), who is Eyes (Seer), who is Book (Talker), and with four or more who is the Captain.
+  // `rot` goes up every mission, so with nobody choosing everyone gets every part.
+  // `prev`, `hands` and `cap` are the parts of this mission so far: when somebody comes or goes the others keep theirs where they can.
+  function assign(keys, rot, prev, hands, cap) {
     const roles = {}, n = keys.length;
-    if (!n) return { roles: roles, hands: null };
+    if (!n) return { roles: roles, hands: null, cap: null };
     const off = rot % n, order = keys.slice(off).concat(keys.slice(0, off));
-    if (order.indexOf(hands) < 0) {
-      const want = order.filter(function (k) { return pref[k] === 'hands'; }), any = order.filter(function (k) { return !pref[k]; });
-      const pool = want.length ? want : any.length ? any : order;
-      hands = pool.length > 1 && pool[0] === lastHands ? pool[1] : pool[0];     // never Hands twice in a row when somebody else could be
+    const mid = !!prev && order.some(function (k) { return prev[k]; });     // in the middle of a mission
+    // by wish, then somebody without a wish, then anybody; never the same player twice in a row when somebody else could be
+    function choose(pool, want, last) {
+      const wish = pool.filter(function (k) { return pref[k] === want; }), any = pool.filter(function (k) { return !pref[k]; });
+      const from = wish.length ? wish : any.length ? any : pool;
+      return from.length > 1 && from[0] === last ? from[1] : from[0];
     }
-    const at = order.indexOf(hands), others = order.slice(at + 1).concat(order.slice(0, at)), o = others.length;
+    // in the middle of a mission: who can take an empty part with the least loss. Somebody without a part first
+    // (just came back, or was the Captain of a crew that is too small now), then one of the bigger group, Seers or Talkers
+    function spare(pool) {
+      if (!mid) return null;
+      const idle = pool.filter(function (k) { return !prev[k] || prev[k].C; });
+      if (idle.length) return idle[0];
+      if (n < 4) return null;
+      const E = pool.filter(function (k) { return prev[k].E && !prev[k].B && !prev[k].H; }), B = pool.filter(function (k) { return prev[k].B && !prev[k].E && !prev[k].H; });
+      const group = E.length > B.length ? E : B.length ? B : E, free = group.filter(function (k) { return !run || k !== run.turn; });
+      return (free.length ? free : group).pop() || null;
+    }
+    if (n < 4 || order.indexOf(cap) < 0) cap = null;                 // a Captain only with four or more
+    if (order.indexOf(hands) < 0) hands = null;
+    if (n >= 4 && !cap) { const pool = order.filter(function (k) { return k !== hands; }); cap = spare(pool) || choose(pool, 'cap', lastCap); }
+    if (!hands) { const pool = order.filter(function (k) { return k !== cap; }); hands = spare(pool) || choose(pool, 'hands', lastHands); }
+    const at = order.indexOf(hands), others = order.slice(at + 1).concat(order.slice(0, at)).filter(function (k) { return k !== cap; }), o = others.length;
+    if (cap) roles[cap] = { C: 1, H: 0, E: 0, B: 0 };
     roles[hands] = { H: 1, E: o ? 0 : 1, B: o ? 0 : 1 };          // alone: training, everything on one tablet
     if (o === 1) roles[others[0]] = { H: 0, E: 1, B: 1 };          // two players: the other one is Eyes and Book
     if (o >= 2) {
@@ -361,14 +413,24 @@ module.exports = function (api) {
       E.forEach(function (k) { roles[k] = { H: 0, E: 1, B: 0 }; });
       B.forEach(function (k) { roles[k] = { H: 0, E: 0, B: 1 }; });
     }
-    return { roles: roles, hands: hands };
+    return { roles: roles, hands: hands, cap: cap };
   }
   // Deals the parts of the running mission to the crew that is in the room right now. Called again whenever somebody
-  // comes or goes, so nothing is ever stuck with a player who left.
+  // comes or goes, so nothing is ever stuck with a player who left: not a part, not the Captain's card, not the turn.
   function deal() {
     if (!run) return;
-    const keys = crewHere().map(function (p) { return p.key; }), a = assign(keys, run.rot, run.roles, run.hands), roles = a.roles;
-    run.roles = roles; run.hands = a.hands;
+    const keys = crewHere().map(function (p) { return p.key; }), hadCap = run.cap;
+    const a = assign(keys, run.rot, run.roles, run.hands, run.cap), roles = a.roles;
+    run.roles = roles; run.hands = a.hands; run.cap = a.cap;
+    run.cardsOn = keys.length >= 3;      // three or more: Talker, Seer, Sender (and a Captain from four)
+    // the turn to press is only there with a Captain, and never with somebody who left or who is the Captain now
+    if (!run.cap) { run.turn = null; run.turnFreeAt = 0; }
+    else if (run.turn && (!roles[run.turn] || roles[run.turn].C)) { run.turn = null; run.turnFreeAt = Date.now(); }
+    else if (!run.turn && (!hadCap || !run.turnFreeAt)) run.turnFreeAt = Date.now();
+    if (run.cap && run.st[run.focus].done) {   // Hands may look at a station that is ready, a Captain's crew is never left at one
+      for (let k = 1; k <= run.st.length; k++) { const j = (run.focus + k) % run.st.length; if (!run.st[j].done) { run.focus = j; break; } }
+    }
+    turnWatch();
     const eyes = keys.filter(function (k) { return roles[k].E; }), books = keys.filter(function (k) { return roles[k].B; });
     if (eyes.length > 1) {      // several Eyes: one sees only the colours, another only the symbols ...
       const used = {};
@@ -388,16 +450,65 @@ module.exports = function (api) {
       books.forEach(function (k, bi) { if (!roles[k].leaves.length) roles[k].leaves.push({ st: bi % s, rows: null }); });
     }
   }
-  function roleCode(r) { return r ? (r.H ? 'H' : '') + (r.E ? 'E' : '') + (r.B ? 'B' : '') : 'W'; }   // W: came in later, watches
+  function roleCode(r) { return r ? r.C ? 'C' : (r.H ? 'H' : '') + (r.E ? 'E' : '') + (r.B ? 'B' : '') : 'W'; }   // W: came in later, watches
+
+  // ---------- the turn to press (only with a Captain) ----------
+  function presser() { return run.cap ? run.turn : run.hands; }   // who may press right now; nobody while the Captain is choosing
+  function idOf(key, list) { for (let i = 0; i < list.length; i++) if (list[i].key === key) return list[i].id; return 0; }
+  // The player the server gives a free turn to: the crew takes it in the order they came in, starting with the Sender,
+  // and never the one who finished the station before.
+  function nextPresser() {
+    const ring = crewHere().map(function (p) { return p.key; }).filter(function (k) { return run.roles[k] && !run.roles[k].C; }), n = ring.length;
+    if (!n) return null;
+    let at = ring.indexOf(run.lastTurn);
+    if (at < 0) at = ring.indexOf(run.hands) - 1;
+    for (let k = 1; k <= n; k++) { const key = ring[((at + k) % n + n) % n]; if (key !== run.lastDone) return key; }
+    return ring[0];
+  }
+  function giveTurn(key, auto) {
+    run.turn = key; run.lastTurn = key; run.turnFreeAt = 0;
+    clearTimeout(turnTimer); turnTimer = null;
+    api.broadcast({ t: ID + '.turn', id: idOf(key, crewHere()), auto: auto ? 1 : 0 }, api.inRoom(ID));
+  }
+  // The game never waits for a slow Captain: a turn that nobody holds goes to the next player after TURN_MS.
+  function turnWatch() {
+    clearTimeout(turnTimer); turnTimer = null;
+    if (!run || run.phase !== 'play' || !run.cap || run.turn || !run.ticking) return;
+    turnTimer = setTimeout(function () {
+      turnTimer = null;
+      if (!run || run.phase !== 'play' || !run.cap || run.turn || !run.ticking) return;
+      const key = nextPresser();
+      if (!key) return;
+      giveTurn(key, true);
+      sendAll();
+    }, Math.max(0, run.turnFreeAt + TURN_MS - Date.now()));
+  }
+  function freeTurn() { run.turn = null; run.turnFreeAt = Date.now(); turnWatch(); }
+
+  // ---------- the message lines ----------
+  function wipeLines() { Object.keys(lines).forEach(function (k) { delete lines[k]; }); }
+  function linesNow(list) {
+    const now = Date.now(), keep = !!run && run.phase === 'play', out = [];     // while the countdown runs a line stays until its station is left
+    list.forEach(function (o) { const L = lines[o.key]; if (L && L.chips.length && (keep || now - L.at < LINE_KEEP)) out.push({ id: o.id, line: L.chips, age: now - L.at }); });
+    return out;
+  }
+  // Which chips a player may put on their line right now: 'pic' pictures, 'word' ready-made words, '' none.
+  // One or two players, the lobby and somebody who watches: the pictures, as the signal board always was.
+  function chipSet(p) {
+    if (!run || (run.phase !== 'play' && run.phase !== 'brief') || !run.cardsOn) return 'pic';
+    const r = run.roles[p.key];
+    return !r ? 'pic' : r.C ? '' : r.H ? 'word' : 'pic';     // the Captain talks; the Sender has words; Seer and Talker have pictures
+  }
 
   // ---------- the countdown ----------
   function timeLeft() { return run.ticking ? Math.max(0, run.endsAt - Date.now()) : run.left; }
   function tick(on) {   // starts or stops the countdown (it stands still while nobody is in the room)
     clearTimeout(clock); clock = null;
-    if (!run || run.phase !== 'play') return;
+    if (!run || run.phase !== 'play') { turnWatch(); return; }
     if (on && !run.ticking) { run.endsAt = Date.now() + run.left; run.ticking = true; }
     if (!on && run.ticking) { run.left = timeLeft(); run.ticking = false; }
     if (run.ticking) clock = setTimeout(timeUp, Math.max(0, run.endsAt - Date.now()) + 15);
+    turnWatch();
   }
   function timeUp() {
     clearTimeout(clock); clock = null;
@@ -406,6 +517,7 @@ module.exports = function (api) {
     // out of time: the launch is postponed, and the family can try again at once
     run.ticking = false; run.left = 0; run.phase = 'fail';
     run.res = { ok: 0, done: run.st.filter(function (st) { return st.done; }).length, of: run.st.length, sparks: run.sparks };
+    turnWatch(); wipeLines();
     sendAll();
   }
 
@@ -436,8 +548,9 @@ module.exports = function (api) {
     });
   }
   function endRun() {
-    clearTimeout(clock); clearTimeout(briefTimer); clearTimeout(staleTimer);
-    clock = briefTimer = staleTimer = null; run = null;
+    clearTimeout(clock); clearTimeout(briefTimer); clearTimeout(staleTimer); clearTimeout(turnTimer);
+    clock = briefTimer = staleTimer = turnTimer = null; run = null;
+    wipeLines();
   }
   function start(p, which) {
     const list = here(), s = shared(), day = which === 'day';
@@ -454,12 +567,16 @@ module.exports = function (api) {
     run = { n: day ? 'day' : which, d: d, day: day ? 1 : 0, train: train, R: R, st: st, phase: 'brief', briefAt: Date.now(),
       base: base, total: base * (train ? 2 : 1), left: base * (train ? 2 : 1), ticking: false, endsAt: 0,
       sparks: 0, cost: SPARK_S[d], focus: 0, crew: list.map(function (o) { return o.key; }), roles: {}, hands: null, rot: s.rot,
-      quiet: '', lockUntil: 0, res: null, emptyAt: 0 };
+      cap: null, cardsOn: false, turn: null, lastTurn: null, lastDone: null, turnFreeAt: 0,   // the Captain, and who holds the turn to press
+      quiet: 0, lockUntil: 0, res: null, emptyAt: 0 };
     deal();
     lastHands = run.hands;
-    // a quiet mission: one part may only use the signal board, not their voice (the family keeps to it themselves)
+    if (run.cap) lastCap = run.cap;
+    // a quiet mission (the family keeps to it themselves). Two players: Eyes + Book may only use the picture chips.
+    // Three or more: radio silence, the Talker uses the picture chips too and only a Captain still talks.
+    // (two numbers are drawn as before, so the mission of the day stays the same for everybody)
     const luck = day ? [R.chance(0.34), R.chance(0.5)] : [M.q || (which >= 9 && Math.random() < 0.2), Math.random() < 0.5];
-    if (!train && (env.ROCKET_QUIET === '1' || (env.ROCKET_QUIET !== '0' && luck[0]))) run.quiet = list.length === 2 || luck[1] ? 'E' : 'B';
+    if (!train && (env.ROCKET_QUIET === '1' || (env.ROCKET_QUIET !== '0' && luck[0]))) run.quiet = 1;
     api.saveSoon();
     briefTimer = setTimeout(beginPlay, BRIEF_MS);
     sendAll();
@@ -468,6 +585,7 @@ module.exports = function (api) {
     briefTimer = null;
     if (!run || run.phase !== 'brief') return;
     run.phase = 'play';
+    if (run.cap && !run.turn) run.turnFreeAt = Date.now();     // the Captain has a moment to give the first turn
     if (crewHere().length) tick(true);
     sendAll();
   }
@@ -504,6 +622,7 @@ module.exports = function (api) {
       else if (!s.board[key] || !(s.board[key].ms > 0) || used < s.board[key].ms) { s.board[key] = { ms: used, m: medals, names: names, day: today }; res.rec = 1; }
     }
     run.phase = 'launch'; run.res = res;
+    turnWatch(); wipeLines();
     api.saveSoon();
     sendAll();
   }
@@ -522,24 +641,32 @@ module.exports = function (api) {
     };
   }
   function stateFor(p, list) {
-    const preview = run ? null : assign(list.map(function (o) { return o.key; }), shared().rot + 1, null, null).roles;
-    const m = { t: ID + '.state', phase: run ? run.phase : 'lobby', pref: pref[p.key] || '' };
+    const preview = run ? null : assign(list.map(function (o) { return o.key; }), shared().rot + 1, null, null, null).roles;
+    // cards: 1 when the parts are the cards Talker, Seer, Sender (three or more players)
+    const m = { t: ID + '.state', phase: run ? run.phase : 'lobby', pref: pref[p.key] || '', cards: (run ? run.cardsOn : list.length >= 3) ? 1 : 0 };
     m.who = list.map(function (o) {
       const r = run ? run.roles[o.key] : preview[o.key];
       return { id: o.id, r: roleCode(r), f: r && r.fac ? r.fac.map(function (f) { return f[0]; }).join('') : '', ch: r && r.leaves ? r.leaves.map(function (l) { return l.st; }) : [], pref: pref[o.key] || '' };
     });
+    m.lines = linesNow(list); m.lineMs = LINE_MS;     // the message lines on show, and the pause that starts a new one
     if (!run || run.phase === 'launch' || run.phase === 'fail') m.lobby = lobbyInfo(p, list);
     if (!run) return m;
-    const r = run.roles[p.key], play = run.phase === 'play';
-    m.mis = { n: run.n, d: run.d, day: run.day, train: run.train ? 1 : 0, total: run.total, base: run.base, cost: run.cost, quiet: run.quiet };
+    const r = run.roles[p.key], play = run.phase === 'play', mine = presser() === p.key;
+    // quiet: '' no, 'E' the Eyes + Book player of two uses only the picture chips, 'R' radio silence (three or more)
+    m.mis = { n: run.n, d: run.d, day: run.day, train: run.train ? 1 : 0, total: run.total, base: run.base, cost: run.cost, quiet: !run.quiet ? '' : run.cardsOn ? 'R' : 'E' };
     m.left = timeLeft(); m.run = run.ticking ? 1 : 0; m.sparks = run.sparks; m.focus = run.focus;
-    m.me = { H: r && r.H ? 1 : 0, E: r && r.E ? 1 : 0, B: r && r.B ? 1 : 0, W: r ? 0 : 1, fac: r && r.fac ? r.fac : null };
+    // me.T: this tablet may press now (Hands; with a Captain whoever holds the turn)
+    m.me = { H: r && r.H ? 1 : 0, E: r && r.E ? 1 : 0, B: r && r.B ? 1 : 0, C: r && r.C ? 1 : 0, W: r ? 0 : 1, T: play && mine ? 1 : 0, fac: r && r.fac ? r.fac : null };
+    m.cap = run.cap ? 1 : 0;
+    // with a Captain: who holds the turn, who finished the station before (cannot be given this one), and how long until the server gives a free turn
+    if (run.cap && play) m.turn = { id: idOf(run.turn, list), last: idOf(run.lastDone, list), wait: run.turn ? 0 : Math.max(0, run.turnFreeAt + TURN_MS - Date.now()), ms: TURN_MS };
     if (run.phase === 'brief') m.brief = Math.max(0, BRIEF_MS - (Date.now() - run.briefAt));
     // The stations. Only while the countdown runs, and each tablet only its own part:
-    //   Book alone: nothing of the panel.  Hands and watchers: pub.  Eyes: pub and the parts of eye dealt to them.
+    //   Book (Talker): nothing of the panel, and pub only while holding the turn.  Hands (Sender), the Captain and
+    //   watchers: pub.  Eyes (Seer): pub and the parts of eye dealt to them.
     m.st = run.st.map(function (st) {
       const v = { kind: st.kind, lv: st.lv, done: st.done };
-      if (!play || (r && !r.H && !r.E)) return v;
+      if (!play || (r && !r.H && !r.E && !r.C && !(run.cap && mine))) return v;
       v.pub = st.pub;
       if (r && r.E) {
         v.eye = {};
@@ -568,7 +695,7 @@ module.exports = function (api) {
       const list = here();
       if (run && (run.phase === 'play' || run.phase === 'brief')) {
         run.emptyAt = 0;
-        if (!crewHere().length) run.crew = list.map(function (o) { return o.key; });   // nobody of the crew is left: whoever is here takes over
+        if (!crewHere().length) takeOver(list);   // nobody of the crew is left: whoever is here takes over
         deal();                                  // a crew member who lost the connection gets a part again; anyone else watches
         if (run.phase === 'play') tick(true);
       } else if (run && list.length <= 1) endRun();   // an old result with nobody left to look at it
@@ -576,9 +703,10 @@ module.exports = function (api) {
     },
     leave: function (p) {   // also called when a tablet loses its connection: the part of that player goes to the others at once
       const list = here();
-      delete sigAt[p.key];
+      delete sigAt[p.key]; delete pointAt[p.key]; delete giveAt[p.key]; delete lines[p.key];
       if (!list.length) {
         seats = [];
+        wipeLines();
         if (!run) return;
         if (run.phase !== 'play') { endRun(); return; }
         tick(false);
@@ -587,17 +715,22 @@ module.exports = function (api) {
         return;
       }
       if (run && (run.phase === 'play' || run.phase === 'brief')) {
-        if (!crewHere().length) run.crew = list.map(function (o) { return o.key; });
+        if (!crewHere().length) takeOver(list);
         deal();
       }
       sendAll();
     }
   });
+  // The whole crew is gone and somebody else is in the room: they are the crew now, with parts dealt from nothing.
+  function takeOver(list) {
+    run.crew = list.map(function (o) { return o.key; });
+    run.roles = {}; run.hands = null; run.cap = null; run.turn = null; run.turnFreeAt = 0;
+  }
 
   api.on('pick', function (p, m) {    // the part a player would like in the next mission
     if (p.room !== ID) return;
     const r = String(m.role || '');
-    if (r === 'hands' || r === 'eyes' || r === 'book') pref[p.key] = r; else delete pref[p.key];
+    if (r === 'hands' || r === 'eyes' || r === 'book' || r === 'cap') pref[p.key] = r; else delete pref[p.key];
     sendAll();
   });
   api.on('start', function (p, m) {
@@ -615,15 +748,27 @@ module.exports = function (api) {
     api.toast(p.name + ' stopped the countdown.', function (o) { return o.room === ID && o.id !== p.id; });
     sendAll();
   });
-  api.on('focus', function (p, m) {   // Hands turns to another station
-    if (p.room !== ID || !run || run.phase !== 'play' || run.hands !== p.key) return;
+  api.on('focus', function (p, m) {   // Hands turns to another station; with a Captain it is the Captain who turns the crew
+    if (p.room !== ID || !run || run.phase !== 'play' || (run.cap || run.hands) !== p.key) return;
     const i = int(m.i);
     if (i < 0 || i >= run.st.length || i === run.focus) return;
+    if (run.cap && run.st[i].done) return;     // not to a station that is ready: the one with the turn would have nothing to press
     run.focus = i;
+    wipeLines();                               // the lines were about the other station
     sendAll();
   });
-  api.on('act', function (p, m) {     // Hands presses something on the station in front of them
-    if (p.room !== ID || !run || run.phase !== 'play' || run.hands !== p.key) return;
+  api.on('turn', function (p, m) {    // the Captain gives the turn to press to one of the crew, also in the middle of a station
+    if (p.room !== ID || !run || run.phase !== 'play' || !run.cap || run.cap !== p.key) return;
+    const id = typeof m.id === 'number' ? m.id : -1, now = Date.now(), to = crewHere().filter(function (o) { return o.id === id; })[0];
+    if (!to || !run.roles[to.key] || run.roles[to.key].C || to.key === run.turn) return;
+    if (now - (giveAt[p.key] || 0) < GIVE_MS) return;
+    giveAt[p.key] = now;
+    if (to.key === run.lastDone) { api.send(p, { t: ID + '.no', why: 'twice', id: to.id }); return; }   // nobody presses two stations in a row
+    giveTurn(to.key, false);
+    sendAll();
+  });
+  api.on('act', function (p, m) {     // whoever may press (Hands, or the holder of the turn) presses something on the station in front of them
+    if (p.room !== ID || !run || run.phase !== 'play' || presser() !== p.key) return;
     const idx = run.focus, st = run.st[idx], a = String(m.a || '').slice(0, 4), i = int(m.i), now = Date.now();
     if (!st || st.done || now < run.lockUntil || !run.ticking) return;
     const res = ACT[st.kind](st, a, i, run.R);
@@ -642,18 +787,44 @@ module.exports = function (api) {
     api.broadcast({ t: ID + '.touch', id: p.id, st: idx, at: at, ok: res.ok ? 1 : 0 }, api.inRoom(ID));
     if (res.done) {
       st.done = 1;
+      run.lastDone = p.key;             // with a Captain: this player cannot be given the next station
+      wipeLines();
       api.broadcast({ t: ID + '.ready', st: idx }, api.inRoom(ID));
       if (run.st.every(function (o) { return o.done; })) { launch(); return; }
       for (let k = 1; k <= run.st.length; k++) { const j = (idx + k) % run.st.length; if (!run.st[j].done) { run.focus = j; break; } }
+      if (run.cap) freeTurn();          // the Captain gives the next turn, or the server does after a moment
     }
     sendAll();
   });
-  api.on('sig', function (p, m) {     // the signal board: a tap shows on every tablet in the room for a moment
+  // A chip for my message line: a picture (Seer; Talker; anybody in the lobby, with one or two players, or watching)
+  // or a ready-made word (Sender). The line shows on every tablet in the room; a new one starts after a pause or when it is full.
+  api.on('sig', function (p, m) {
     if (p.room !== ID) return;
-    const k = String(m.k || ''), v = int(m.v), max = { c: 5, s: 5, n: 9, a: 3, y: 1 }[k], now = Date.now();
-    if (max === undefined || v < 0 || v > max || now - (sigAt[p.key] || 0) < 150) return;
+    const set = chipSet(p), k = typeof m.k === 'string' ? m.k : '', v = int(m.v), now = Date.now();
+    const lim = set === 'word' ? (own(WORD, k) ? WORD[k] : null) : set === 'pic' ? (own(PIC, k) ? PIC[k] : null) : null;
+    if (!lim || v < lim[0] || v > lim[1] || now - (sigAt[p.key] || 0) < SIG_MS) return;
     sigAt[p.key] = now;
-    api.broadcast({ t: ID + '.sig', id: p.id, k: k, v: v }, api.inRoom(ID));
+    let L = lines[p.key];
+    if (!L || now - L.at > LINE_MS || L.chips.length >= LINE_MAX) L = lines[p.key] = { chips: [], at: now };
+    L.chips.push([k, v]); L.at = now;
+    api.broadcast({ t: ID + '.sig', id: p.id, k: k, v: v, line: L.chips }, api.inRoom(ID));
+  });
+  api.on('clear', function (p) {      // takes my own line away
+    if (p.room !== ID || !lines[p.key]) return;
+    delete lines[p.key];
+    api.broadcast({ t: ID + '.clear', id: p.id }, api.inRoom(ID));
+  });
+  // The Seer points at a control of the station the crew is turned to: only its name goes round ("b2", "set"),
+  // so the ring on the other tablets gives away no colour, symbol, number or light.
+  api.on('point', function (p, m) {
+    if (p.room !== ID || !run || run.phase !== 'play' || !run.cardsOn) return;
+    const r = run.roles[p.key], st = run.st[run.focus], a = typeof m.a === 'string' ? m.a : '', i = int(m.i), now = Date.now();
+    if (!r || !r.E || !st || st.done) return;
+    const set = CTL[st.kind](st.pub);
+    if (!own(set, a) || (set[a] && (i < 0 || i >= set[a]))) return;      // no such control on this station
+    if (now - (pointAt[p.key] || 0) < POINT_MS) return;
+    pointAt[p.key] = now;
+    api.broadcast({ t: ID + '.point', id: p.id, st: run.focus, at: a + (set[a] ? i : '') }, api.inRoom(ID));
   });
 
   // ---------- daily quests ----------

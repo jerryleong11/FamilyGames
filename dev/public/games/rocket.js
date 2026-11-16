@@ -1,12 +1,16 @@
 // Rocket Base (client). The family gets a rocket ready before the countdown ends, and every tablet has a
 // different part: Hands presses but sees only grey shapes, Eyes sees the real panel but cannot press, Book has
-// the picture rules. The server sends each tablet only what its part may know and checks every press;
-// this file draws what it is told. See docs/GAME-MODULES.md.
+// the picture rules. With three or more players the parts are cards with one way each to pass things on:
+// the Talker (Book) is the only one who talks, the Seer (Eyes) sends picture chips and points at a control,
+// the Sender (Hands) sends ready-made words, and from four players a Captain gives the turn to press.
+// The chips of a player line up as a message line on every tablet. The tablet cannot hear who talks: the card
+// tells the rule and the family keeps to it. The server sends each tablet only what its part may know and
+// checks every press, chip, point and turn; this file draws what it is told. See docs/GAME-MODULES.md.
 (function () {
   'use strict';
   var ID = 'rocket';
   var api = null, root = null, cv = null, g = null, W = 0, H = 0, dpr = 1, raf = 0, lastDraw = 0;
-  var el = {}, lay = null, bg = { key: '', cv: null };
+  var el = {}, lay = null, bg = { key: '', cv: null }, signs = false;
   var st = null, stAt = 0;      // the last state from the server, and when it arrived
   var ui = null;                // what only this tablet knows: what is on show, animations
   var ctls = [];                // everything that can be tapped on the canvas this frame, in screen pixels
@@ -28,6 +32,31 @@
     B: { ico: '📖', en: 'Book', zh: '书', py: 'shū', ms: 'Buku', tip: 'You have the mission book. Find the rule and tell the others!' },
     W: { ico: '⏳', en: 'Watching', zh: '观看', py: 'guānkàn', ms: 'Menonton', tip: 'This mission has started. You are in the next one!' }
   };
+  // With three or more players the parts are cards. how: the short line of the lobby; tip: the line of the briefing card.
+  var CARD = {
+    B: { ico: '🗣️', en: 'Talker', zh: '发言员', py: 'fāyán yuán', ms: 'Jurucakap', how: 'has the rule book · the only one who talks',
+      tip: 'You have the rule book. Only YOU may talk!' },
+    E: { ico: '👀', en: 'Seer', zh: '观察员', py: 'guānchá yuán', ms: 'Pemerhati', how: 'sees the panel · no talking · sends pictures, points',
+      tip: 'You see the real panel. No talking: send pictures, tap a control to point!' },
+    H: { ico: '💬', en: 'Sender', zh: '发报员', py: 'fābào yuán', ms: 'Penghantar', how: 'presses, sees only grey · no talking · sends words',
+      tip: 'You press, but all looks grey. No talking: send words like ❓ ✅!' },
+    C: { ico: '🧭', en: 'Captain', zh: '队长', py: 'duìzhǎng', ms: 'Kapten', how: 'picks who presses each station · may talk',
+      tip: 'You pick who presses each station, never the same one twice. You may talk!' }
+  };
+  // The ready-made words of the Sender: the picture first, the three languages as small labels
+  var WORDS = [
+    { ico: '❓', en: 'Which one?', zh: '哪一个？', py: 'nǎ yí gè', ms: 'Yang mana?' },
+    { ico: '🔁', en: 'Again', zh: '再一次', py: 'zài yí cì', ms: 'Sekali lagi' },
+    { ico: '✋', en: 'Wait', zh: '等一下', py: 'děng yíxià', ms: 'Tunggu' },
+    { ico: '✅', en: 'Done', zh: '好了', py: 'hǎo le', ms: 'Siap' },
+    { ico: '⏩', en: 'Faster', zh: '快一点', py: 'kuài yìdiǎn', ms: 'Lebih cepat' },
+    { ico: '🆘', en: 'Help', zh: '帮帮我', py: 'bāngbang wǒ', ms: 'Tolong' }
+  ];
+  var TXT = {
+    turn: { en: 'Your turn!', zh: '轮到你了', py: 'lún dào nǐ le', ms: 'Giliran kamu' },
+    who: { en: 'Who presses?', zh: '谁来按？', py: 'shéi lái àn', ms: 'Siapa tekan?' },
+    radio: { en: 'Radio silence', zh: '无线电静默', py: 'wúxiàndiàn jìngmò', ms: 'Senyap radio' }
+  };
   var STN = {
     order: { en: 'Launch Buttons', zh: '发射按钮', py: 'fāshè ànniǔ', ms: 'Butang Pelancar' },
     hose: { en: 'Fuel Hoses', zh: '燃料管', py: 'ránliào guǎn', ms: 'Hos Bahan Api' },
@@ -41,15 +70,17 @@
   };
   var BODY = { order: '#F0705A', hose: '#2F9E83', dial: '#5AA9FF', 'switch': '#9B6BFF', grid: '#4C5FD5', cells: '#E8A93B', blink: '#E0447F', cargo: '#4FB3A5', wheels: '#7A8BC9' };
   var FAC = { col: '🎨', sym: '🔣', num: '🔢', lit: '💡' };
-  var SIGS = [];
-  (function () {
-    var i;
-    for (i = 0; i < 6; i++) SIGS.push(['c', i]);
-    for (i = 0; i < 6; i++) SIGS.push(['s', i]);
-    for (i = 0; i < 10; i++) SIGS.push(['n', i]);
-    for (i = 0; i < 4; i++) SIGS.push(['a', i]);
-    SIGS.push(['y', 1]); SIGS.push(['y', 0]);
-  })();
+  // The picture board, six chips in a row: c colour, s symbol, n number, y yes / no, a arrow, x takes my line away.
+  // At a station that has a planet the planets (p) take the row of the symbols. The board of words is drawn from WORDS.
+  var PICS = [
+    [['c', 0], ['c', 1], ['c', 2], ['c', 3], ['c', 4], ['c', 5]],
+    [['s', 0], ['s', 1], ['s', 2], ['s', 3], ['s', 4], ['s', 5]],
+    [['n', 1], ['n', 2], ['n', 3], ['n', 4], ['n', 5], ['n', 6]],
+    [['n', 7], ['n', 8], ['n', 9], ['n', 0], ['y', 1], ['y', 0]],
+    [['a', 0], ['a', 1], ['a', 2], ['a', 3], null, ['x', 0]]
+  ];
+  var PICP = [['p', 0], ['p', 1], ['p', 2], ['p', 3], ['p', 4], ['p', 5]];
+  var PYFONT = "system-ui, 'Segoe UI', Roboto, 'Noto Sans', Arial, sans-serif";   // pinyin: Fredoka misdraws some tone marks
 
   var CSS = [
     '.rk-root{background:#0B1437;overflow:hidden;touch-action:none;color:#1B2A49}',
@@ -98,7 +129,7 @@
     '.rk-info small{font-weight:600;font-size:13px}',
     '.rk-new{color:#B3122F}',
     '.rk-roles{display:flex;align-items:center;gap:6px;flex-wrap:wrap}',
-    '.rk-roles .chip{height:48px;padding:0 12px;font-size:17px;white-space:nowrap}',
+    '.rk-roles .chip{height:48px;min-width:48px;padding:0 12px;font-size:17px;white-space:nowrap}',
     '.rk-crew{display:flex;gap:6px;flex-wrap:wrap;font-size:15px}',
     '.rk-crew span{background:#fff;border:2.5px solid #1B2A49;border-radius:999px;padding:1px 10px;white-space:nowrap}',
     '.rk-crew span.me{background:#FFD66B}',
@@ -118,6 +149,11 @@
     '.rk-part b{font-size:24px}',
     '.rk-part small{display:block;font-size:14px;font-weight:600}',
     '.rk-pico{font-size:44px;line-height:1}',
+    '.rk-part>div{flex:1 1 auto;min-width:0}',
+    '.rk-talk{flex:none;width:48px;height:48px;border-radius:50%;border:3px solid #1B2A49;background:#BFF0C6;display:flex;align-items:center;justify-content:center;font-size:26px;line-height:1}',
+    '.rk-talk.no{background:#DCD3FF}',
+    '.rk-mine{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
+    '.rk-mine small{font-size:13px;font-weight:600}',
     '.rk-quiet{background:#DCD3FF;border:3px solid #1B2A49;border-radius:18px;padding:6px 14px;font-size:16px}',
     '.rk-quiet small{display:block;font-size:14px}',
     '.rk-bar{height:16px;border:3px solid #1B2A49;border-radius:999px;background:#fff;overflow:hidden;flex:none}',
@@ -132,14 +168,54 @@
     '@media (max-width:900px),(max-height:560px){.rk-top .btn{font-size:16px;padding:0 12px}.rk-pill{font-size:17px;padding:0 10px}.rk-clock{font-size:28px;min-width:104px}' +
       '.rk-panel{padding:8px 12px;gap:6px;border-width:4px;border-radius:24px;font-size:15px}.rk-h h2{font-size:23px}.rk-ico{font-size:32px}.rk-tri{font-size:14px}.rk-go{font-size:19px;height:48px;padding:0 14px}' +
       '.rk-tab{font-size:14px}.rk-m{height:62px;font-size:24px}.rk-info{font-size:14px;padding:4px 10px}.rk-info b{font-size:15px}.rk-roles .chip{padding:0 9px;font-size:15px}.rk-crew{font-size:14px}' +
-      '.rk-big{font-size:30px}.rk-sum{font-size:20px}.rk-mds.big i{width:40px;height:40px;font-size:26px;line-height:32px}.rk-part{font-size:16px;padding:4px 12px}.rk-part b{font-size:20px}.rk-pico{font-size:36px}.rk-btns .btn{font-size:17px;padding:0 14px}}'
+      '.rk-big{font-size:30px}.rk-sum{font-size:20px}.rk-mds.big i{width:40px;height:40px;font-size:26px;line-height:32px}.rk-part{font-size:16px;padding:4px 12px}.rk-part b{font-size:20px}.rk-pico{font-size:36px}.rk-btns .btn{font-size:17px;padding:0 14px}' +
+      '.rk-roles{gap:5px}.rk-roles.five .chip{padding:0 7px;font-size:14px}.rk-roles.five.tight{gap:3px;font-size:14px}.rk-roles.five.tight .chip{padding:0 4px;font-size:13px}.rk-cap{font-size:14px}.rk-cap>span{padding:0 10px}}'
   ].join('\n');
 
   // ---------- small helpers ----------
   function freshUi() {
-    return { view: 0, tab: 'panel', board: false, press: {}, marks: {}, hop: {}, slide: {}, ang: {}, spin: {}, sigs: [], fx: [], pops: [], puffs: [], conf: [],
+    return { view: 0, tab: 'panel', board: false, press: {}, marks: {}, hop: {}, slide: {}, ang: {}, spin: {}, fx: [], pops: [], puffs: [], conf: [],
+      lines: {}, order: [], points: [], turnAt: 0, mineAt: 0, noAt: 0,   // the message lines by player id, the order they came in; controls pointed at; when a turn was given, came to me, was refused
       phaseAt: 0, blink0: 0, sparkAt: 0, shake: 0, deny: 0, dealt: 0, stopAsk: 0, hold: null, readyAt: 0, sel: 0, ltab: -1, briefMs: 0, panelSig: '', capSig: '', misSig: '', hud: {}, puffAt: 0, last: 0 };
   }
+  // An old tablet may not have the newer picture signs: then an older sign with the same meaning stands for the card
+  function hasSign(ch) {
+    try {
+      var c = document.createElement('canvas'), q, d, i;
+      c.width = c.height = 28; q = c.getContext('2d');
+      q.textBaseline = 'top'; q.font = '22px sans-serif'; q.fillStyle = '#000'; q.fillText(ch, 0, 2);
+      d = q.getImageData(0, 0, 28, 28).data;
+      for (i = 0; i < d.length; i += 4) if (d[i + 3] > 60 && (Math.abs(d[i] - d[i + 1]) > 8 || Math.abs(d[i + 1] - d[i + 2]) > 8)) return true;   // a coloured dot: a real picture, not an empty box
+      return false;
+    } catch (e) { return true; }
+  }
+  function pickSigns() { if (!hasSign(CARD.B.ico)) CARD.B.ico = '👄'; if (!hasSign(CARD.C.ico)) CARD.C.ico = '👑'; }
+  // ---------- the cards ----------
+  function cardsOn() { return !!(st && st.cards); }
+  function part(c) { return (cardsOn() && CARD[c]) || ROLE[c] || CARD[c]; }
+  // Who is asked not to talk: with cards the Seer and the Sender always and in radio silence the Talker too; with two players the quiet card
+  function silent(r) {
+    var q = st && st.mis ? st.mis.quiet : '';
+    if (!st || (st.phase !== 'play' && st.phase !== 'brief') || r === 'W' || r === 'C') return false;
+    if (cardsOn()) return r === 'E' || r === 'H' || (r === 'B' && q === 'R');
+    return q === 'E' && r.indexOf('E') >= 0;
+  }
+  // The chips this tablet may send: 'pic' pictures, 'word' ready-made words, '' none (the same rule as on the server)
+  function boardKind() {
+    var me = st && st.me;
+    if (!st || (st.phase !== 'play' && st.phase !== 'brief') || !st.cards || !me || me.W) return 'pic';
+    return me.C ? '' : me.H ? 'word' : 'pic';
+  }
+  // What stands at the foot of the side column: my board, the Captain's crew ('crew'), or nothing
+  function dockKind() {
+    if (!st) return '';
+    if (st.phase === 'play' && st.me && st.me.C) return 'crew';
+    return ui.board ? boardKind() : '';
+  }
+  function hasPanel() { var i; if (st && st.st) for (i = 0; i < st.st.length; i++) if (st.st[i].pub) return true; return false; }
+  function canPoint() { var me = st.me; return !!(st.cards && me.E && !me.H && !me.B && !me.T); }   // a Seer without the turn points instead of pressing
+  function canTurn() { var me = st.me; return !!(st.cap ? me.C : me.H); }                             // who turns the crew to a station
+  function whoIs(id) { var k; if (st) for (k = 0; k < st.who.length; k++) if (st.who[k].id === id) return st.who[k]; return null; }
   function clamp(v, a, b) { return v < a ? a : v > b ? b : v; }
   function ease(k) { k = clamp(k, 0, 1); return k * k * (3 - 2 * k); }
   function shade(hex, f) { return window.Scene && window.Scene.shade ? window.Scene.shade(hex, f) : hex; }
@@ -157,6 +233,17 @@
     if (light) { q.lineJoin = 'round'; q.lineWidth = Math.max(4, size * 0.17); q.strokeStyle = NAVY; q.strokeText(String(v), x, y); }
     q.fillStyle = light ? '#fff' : NAVY; q.fillText(String(v), x, y);
   }
+  // One line of text on the canvas made of pieces [text, 'py' for pinyin or '', weight]; made smaller until it fits maxW.
+  function pieces(q, list, x, y, size, maxW, col, align) {
+    var w = 0, i;
+    function font(p, s) { return (p[2] || 600) + ' ' + s + 'px ' + (p[1] ? PYFONT : FONT); }
+    for (i = 0; i < list.length; i++) { q.font = font(list[i], size); w += q.measureText(list[i][0]).width; }
+    if (maxW && w > maxW) { size = size * maxW / w; w = maxW; }
+    if (align === 'center') x -= w / 2;
+    q.textAlign = 'left'; q.textBaseline = 'middle'; q.fillStyle = col || NAVY;
+    for (i = 0; i < list.length; i++) { q.font = font(list[i], size); q.fillText(list[i][0], x, y); x += q.measureText(list[i][0]).width; }
+  }
+  function tri3(o) { return [[o.en, '', 700], [' · ' + o.zh + ' ', '', 600], [o.py, 'py', 500], [' · ' + o.ms, '', 600]]; }   // a name in three languages, as pieces
   function mmss(ms) { var s = Math.max(0, Math.ceil(ms / 1000)); return Math.floor(s / 60) + ':' + ('0' + s % 60).slice(-2); }
   function show(node, on) { if (node && node.hidden === on) node.hidden = !on; }
   function setText(node, s) { if (node._s !== s) { node._s = s; node.textContent = s; } }
@@ -516,7 +603,14 @@
 
   // ---------- the layout of one screen ----------
   function layout() {
-    var pad = W < 900 ? 8 : 12, top = 66, sideW = Math.round(clamp(W * 0.3, 236, 400)), gh = Math.round(clamp(H * 0.2, 88, 150)), rh;
+    var pad = W < 900 ? 8 : 12, top = 66, sideW = Math.round(clamp(W * 0.3, 236, 400)), gh = Math.round(clamp(H * 0.2, 88, 150)), rh, need;
+    if (st && st.phase === 'play') {
+      // While the countdown runs the side column takes the width the panel cannot use (the panel is as big as the
+      // height lets it be): room for the message lines and for a board of six chips in a row.
+      need = 46 + 448 * Math.min((H - top - pad - 104 - 12) / 306, 2);
+      sideW = Math.round(clamp(W - pad * 3 - need, sideW, 400));
+    }
+    if (ui && st && dockKind()) sideW = Math.max(sideW, Math.min(305, W - pad * 3 - 320));   // six chips of 48 in a row
     lay = { pad: pad, top: top, capH: 24, gy: H - gh, gh: gh,
       side: { x: W - sideW - pad, y: top, w: sideW, h: H - top - pad },
       main: { x: pad, y: top, w: W - sideW - pad * 3, h: H - top - pad } };
@@ -581,7 +675,7 @@
     beam([TW.x + TW.w / 2, TW.top, TW.x + TW.w / 2, TW.top - h * 0.07], 3, '#F0654A');
   }
   function bgSprite(d) {
-    var key = d + ':' + W + 'x' + H + '@' + dpr, s, q;
+    var key = d + ':' + W + 'x' + H + '@' + dpr + ':' + lay.side.w, s, q;
     if (bg.key !== key || !bg.cv) {
       s = bg.cv || document.createElement('canvas');
       s.width = Math.round(W * dpr); s.height = Math.round(H * dpr);
@@ -679,10 +773,9 @@
     if (st) st.who.forEach(function (w) { if (all[w.id]) list.push({ p: all[w.id], w: w }); });
     return list;
   }
-  function roleIcons(r) { return r === 'W' ? [ROLE.W.ico] : r.split('').map(function (c) { return ROLE[c].ico; }); }
-  function isQuiet(r) { return !!(st && st.mis && st.mis.quiet && r !== 'W' && r.indexOf(st.mis.quiet) >= 0 && (st.phase === 'play' || st.phase === 'brief')); }
+  function roleIcons(r) { return r === 'W' ? [ROLE.W.ico] : r.split('').map(function (c) { return part(c).ico; }); }
   function drawPeople(now) {
-    var list = people(), n = list.length, S = lay.side, me = api.myId(), phase = st.phase, tL = (now - ui.phaseAt) / 1000;
+    var list = people(), n = list.length, S = lay.side, me = api.myId(), phase = st.phase, tL = (now - ui.phaseAt) / 1000, holder = phase === 'play' && st.turn ? st.turn.id : 0;
     if (!n) return;
     var rows = n > 4 ? 2 : 1, per = Math.ceil(n / rows), sc = clamp(S.w / (per * 96), 0.4, 0.72) * clamp(H / 600, 0.82, 1.2) * (rows > 1 ? 0.9 : 1), tagS = clamp(sc * 1.3, 0.6, 0.95) * (rows > 1 ? 0.86 : 1);
     var cheer = phase === 'launch' && tL > 0.9 && tL < 6;
@@ -694,7 +787,7 @@
     });
     list.sort(function (a, b) { return a.y - b.y; });
     list.forEach(function (o) {
-      var p = o.p, id = p.id, r = o.w.r, h, top, k, icons, bx, dw = 60 * sc, dh = 20 * sc, dk = o.y + 10 * sc, gain, s, sig, age;
+      var p = o.p, id = p.id, r = o.w.r, h, top, k, icons, bx, dw = 60 * sc, dh = 20 * sc, dk = o.y + 10 * sc, gain, s;
       g.fillStyle = 'rgba(11,20,55,0.3)'; g.beginPath(); g.ellipse(o.x + 5 * sc, o.y, 34 * sc, 9 * sc, 0, 0, TAU); g.fill();
       h = api.drawAvatar(g, p, o.x, o.y - 4 * sc, now / 1000 + id * 0.7, { scale: sc, facing: 1, moving: cheer || now - (ui.hop[id] || 0) < 450 });
       // the console in front of them: lit top, darker front
@@ -706,21 +799,18 @@
       g.save(); g.translate(o.x, top); g.scale(tagS, tagS);
       k = api.nameTag(g, p, 0, 0, id === me);
       icons = roleIcons(r);
-      if (isQuiet(r)) icons.push('🔇');
+      if (silent(r)) icons.push('🔇');
       bx = -(icons.length * 30) / 2;
       icons.forEach(function (ic, j) {   // the part of this player
-        circ(g, bx + 15 + j * 30, -k - 17, 14); g.fillStyle = ic === ROLE.H.ico ? YEL : ic === '🔇' ? '#DCD3FF' : '#fff'; g.fill(); ol(g, 2.5);
+        circ(g, bx + 15 + j * 30, -k - 17, 14); g.fillStyle = ic === part('H').ico ? YEL : ic === '🔇' ? '#DCD3FF' : '#fff'; g.fill(); ol(g, 2.5);
         text(g, ic, bx + 15 + j * 30, -k - 16, 16);
       });
+      if (holder === id) {               // with a Captain: this one holds the turn to press
+        s = -k - 50 - 5 * Math.abs(Math.sin(now / 260));
+        circ(g, 0, s, 15); g.fillStyle = YEL; g.fill(); ol(g, 3); text(g, '👆', 0, s + 1, 17);
+      }
       g.restore();
       top -= (k + 34) * tagS;
-      for (s = ui.sigs.length - 1; s >= 0; s--) if (ui.sigs[s].id === id) { sig = ui.sigs[s]; break; }   // what they just signalled
-      if (sig && now - sig.t < 3000) {
-        age = now - sig.t; g.globalAlpha = age < 2500 ? 1 : 1 - (age - 2500) / 500;
-        rr(g, o.x - 17, top - 38, 34, 34, 11); g.fillStyle = '#fff'; g.fill(); ol(g, 2.5);
-        sigIcon(g, sig.k, sig.v, o.x, top - 21, 11);
-        g.globalAlpha = 1;
-      }
       gain = phase === 'launch' && st.res && st.res.stars ? st.res.stars[id] : 0;
       if (gain && tL > 1.4 && tL < 4.4) {   // the stars this player just earned float up
         k = (tL - 1.4) / 3; s = '+' + gain + ' ⭐';
@@ -733,27 +823,30 @@
 
   // ---------- the control panel (or the mission book) on the left ----------
   function pageFor(i) { var list = st.pages || [], k; for (k = 0; k < list.length; k++) if (list[k].st === i) return list[k]; return null; }
-  function bookSide() { var me = st.me; return !!me.B && ((!me.E && !me.H) || ui.tab === 'book'); }
+  // The book is on show when this tablet has no panel (Book / Talker without the turn) or its book tab is chosen
+  function bookSide() { var me = st.me; return !!me.B && (!hasPanel() || ui.tab === 'book'); }
   function drawTabs(fx, fy, fw) {
-    var me = st.me, n = st.st.length, i, x, y = fy + 9, dp, s, both = me.B && (me.E || me.H), tx;
+    var me = st.me, n = st.st.length, i, x, y = fy + 9, dp, s, both = me.B && hasPanel(), tx, turn = canTurn();
+    var roomy = !both || (fw - 24 - 124) / n >= 62, sp = roomy ? 62 : 56;                       // the two tabs on the right get narrower before anything overlaps
+    var pitch = clamp(Math.floor((fw - 24 - (both ? sp * 2 : 0)) / n), 54, 62), tw = pitch - 6;   // six stations and two tabs still fit a narrow console
     T = { x: 0, y: 0, s: 1 };
     for (i = 0; i < n; i++) (function (i) {
-      s = st.st[i]; x = fx + 12 + i * 62;
-      dp = block(g, 'tab' + i, x, y, 56, 48, s.done ? '#BFF0C6' : i === st.focus ? YEL : '#FFFFFF', { r: 14, local: function () {
+      s = st.st[i]; x = fx + 12 + i * pitch;
+      dp = block(g, 'tab' + i, x, y, tw, 48, s.done ? '#BFF0C6' : i === st.focus ? YEL : '#FFFFFF', { r: 14, local: function () {
         ui.view = i; ui.hold = null; ui.blink0 = Date.now();
-        if (st.me.H && i !== st.focus) api.send({ t: ID + '.focus', i: i });
+        if (turn && i !== st.focus && !(st.cap && st.st[i].done)) api.send({ t: ID + '.focus', i: i });   // Hands, or with a Captain the Captain, turns the crew
       } });
-      kico(g, s.kind, x + 28, y + 21 + dp, 14, NAVY);
-      if (s.done) { circ(g, x + 47, y + 7, 10); g.fillStyle = GREEN; g.fill(); ol(g, 2.5); tick(g, x + 47, y + 7, 4.5); }
-      else if (i === st.focus) { circ(g, x + 47, y + 7, 11); g.fillStyle = '#fff'; g.fill(); ol(g, 2.5); text(g, ROLE.H.ico, x + 47, y + 8, 12); }
+      kico(g, s.kind, x + tw / 2, y + 21 + dp, 14, NAVY);
+      if (s.done) { circ(g, x + tw - 9, y + 7, 10); g.fillStyle = GREEN; g.fill(); ol(g, 2.5); tick(g, x + tw - 9, y + 7, 4.5); }
+      else if (i === st.focus) { circ(g, x + tw - 9, y + 7, 11); g.fillStyle = '#fff'; g.fill(); ol(g, 2.5); text(g, cardsOn() ? '👆' : ROLE.H.ico, x + tw - 9, y + 8, 12); }   // the crew is pressing here
       if (me.B && pageFor(i)) { circ(g, x + 8, y + 7, 9); g.fillStyle = CREAM; g.fill(); ol(g, 2.5); text(g, ROLE.B.ico, x + 8, y + 8, 10); }
-      if (i === ui.view) { rr(g, x + 10, y + 50, 36, 6, 3); g.fillStyle = '#fff'; g.fill(); }
+      if (i === ui.view) { rr(g, x + tw / 2 - 18, y + 50, 36, 6, 3); g.fillStyle = '#fff'; g.fill(); }
     })(i);
-    if (both) {   // this tablet is Eyes and Book: two tabs
-      tx = fx + fw - 12 - 124;
-      [['panel', ROLE.E.ico], ['book', ROLE.B.ico]].forEach(function (o, j) {
-        dp = block(g, 'side' + o[0], tx + j * 62, y, 58, 48, ui.tab === o[0] ? YEL : '#FFFFFF', { r: 14, local: function () { ui.tab = o[0]; } });
-        text(g, o[1], tx + j * 62 + 29, y + 22 + dp, 22);
+    if (both) {   // this tablet has the panel and the book (Eyes + Book; a Talker with the turn): two tabs
+      tx = fx + fw - 12 - sp * 2;
+      [['panel', me.E ? ROLE.E.ico : '👆'], ['book', ROLE.B.ico]].forEach(function (o, j) {
+        dp = block(g, 'side' + o[0], tx + j * sp, y, sp - 4, 48, ui.tab === o[0] ? YEL : '#FFFFFF', { r: 14, local: function () { ui.tab = o[0]; } });
+        text(g, o[1], tx + j * sp + (sp - 4) / 2, y + 22 + dp, 22);
       });
     }
   }
@@ -810,6 +903,9 @@
     KIND[s.kind](g, s, e, now, seen);
     g.restore();
     if (!seen) fog(bx, by, bw, bh, now);
+    if (st.cap && me.T && !s.done) {   // with a Captain: a bright frame says the turn to press is mine
+      rr(g, bx - 2, by - 2, bw + 4, bh + 4, 18); g.lineWidth = 7; g.strokeStyle = 'rgba(255,214,107,' + (0.55 + 0.45 * Math.abs(Math.sin(now / 320))) + ')'; g.stroke();
+    }
     if (s.done) {   // this station is ready
       k = ease((now - ui.readyAt) / 300);
       g.globalAlpha = 0.92; circ(g, bx + bw / 2, by + bh / 2, 58 * (0.6 + 0.4 * k)); g.fillStyle = GREEN; g.fill(); ol(g, 5); g.globalAlpha = 1;
@@ -832,45 +928,165 @@
       g.globalAlpha = 1;
     }
   }
+  // A control the Seer points at: a white ring that pulses and a pointing hand, on every tablet that shows this panel.
+  // Nothing of it says a colour, a symbol, a number or a light.
+  function drawPoints(now) {
+    var i, o, k, age, grow;
+    for (i = ui.points.length - 1; i >= 0; i--) {
+      o = ui.points[i]; age = now - o.t;
+      if (age > 2000) { ui.points.splice(i, 1); continue; }
+      if (bookSide() || ui.view !== o.st || !lay.pan) continue;
+      k = ctlAt(o.at);
+      if (!k) continue;
+      grow = 5 + 5 * Math.abs(Math.sin(age / 170));
+      g.globalAlpha = age < 1500 ? 1 : 1 - (age - 1500) / 500;
+      rr(g, k.x - grow, k.y - grow, k.w + grow * 2, k.h + grow * 2, 18 + grow); g.lineWidth = 10; g.strokeStyle = NAVY; g.stroke(); g.lineWidth = 5; g.strokeStyle = '#fff'; g.stroke();
+      circ(g, clamp(k.x + k.w - 4, 20, W - 20), k.y + 2, 15); g.fillStyle = '#fff'; g.fill(); ol(g, 3);
+      text(g, '👉', clamp(k.x + k.w - 4, 20, W - 20), k.y + 3, 17);
+      g.globalAlpha = 1;
+    }
+  }
 
-  // ---------- the signal board ----------
-  function sigIcon(q, k, v, x, y, r) {
+  // ---------- the boards (picture chips, ready-made words), the Captain's crew, the message lines ----------
+  // One chip: c colour, s symbol, n number, a arrow, p planet, w a ready-made word, y yes / no, x takes my line away
+  function chipIcon(q, k, v, x, y, r) {
     if (k === 'c') { circ(q, x, y, r); q.fillStyle = COLS[v]; q.fill(); ol(q, Math.max(2, r * 0.12)); circ(q, x - r * 0.3, y - r * 0.32, r * 0.2); q.fillStyle = 'rgba(255,255,255,0.5)'; q.fill(); }
     else if (k === 's') sym(q, v, x, y, r * 0.86);
     else if (k === 'n') text(q, String(v), x, y + 1, r * 1.9, NAVY, 700);
     else if (k === 'a') arrow(q, x, y, r * 0.95, v, NAVY);
+    else if (k === 'p') { if (PLANETS[v]) planetDraw(q, PLANETS[v][0], PLANETS[v][1], x, y, r * 0.68); }
+    else if (k === 'w') text(q, WORDS[v] ? WORDS[v].ico : '?', x, y + 1, r * 1.7);
+    else if (k === 'x') {   // a rubber
+      poly(q, [x - r * 1.1, y, x - r * 0.4, y - r * 0.75, x + r, y - r * 0.75, x + r, y + r * 0.75, x - r * 0.4, y + r * 0.75]); q.fillStyle = NAVY; q.fill(); ol(q, 2);
+      q.beginPath(); q.moveTo(x - r * 0.08, y - r * 0.32); q.lineTo(x + r * 0.56, y + r * 0.32); q.moveTo(x + r * 0.56, y - r * 0.32); q.lineTo(x - r * 0.08, y + r * 0.32); q.lineCap = 'round'; q.lineWidth = Math.max(2, r * 0.2); q.strokeStyle = '#fff'; q.stroke();
+    }
     else if (v) { circ(q, x, y, r); q.fillStyle = GREEN; q.fill(); ol(q, Math.max(2, r * 0.12)); tick(q, x, y, r * 0.5); }
     else { circ(q, x, y, r); q.fillStyle = RED; q.fill(); ol(q, Math.max(2, r * 0.12)); cross(q, x, y, r * 0.42); }
   }
-  function drawBoard() {
-    var S = lay.side, gap = 5, cols = Math.max(4, Math.floor((S.w - 14) / 58)), rows = Math.ceil(SIGS.length / cols), size, x0, y0, i, x, y, dp;
-    size = Math.min(66, (S.w - 14 - (cols - 1) * gap) / cols, (S.h - 16 - (rows - 1) * gap) / rows);
-    x0 = S.x + (S.w - cols * size - (cols - 1) * gap) / 2; y0 = S.y + 8;
-    rr(g, S.x, S.y, S.w, rows * (size + gap) + 11, 18); g.fillStyle = CREAM; g.fill(); ol(g, 4);
-    T = { x: 0, y: 0, s: 1 };
-    for (i = 0; i < SIGS.length; i++) (function (o) {
-      x = x0 + (i % cols) * (size + gap); y = y0 + Math.floor(i / cols) * (size + gap);
-      dp = block(g, 'sg' + o[0] + o[1], x, y, size, size, '#FFFFFF', { r: 13, local: function () { api.send({ t: ID + '.sig', k: o[0], v: o[1] }); } });
-      sigIcon(g, o[0], o[1], x + size / 2, y + size / 2 - 3 + dp, size * 0.3);
-    })(SIGS[i]);
+  function chipSend(k, v) { return function () { if (k === 'x') api.send({ t: ID + '.clear' }); else api.send({ t: ID + '.sig', k: k, v: v }); }; }
+  function crewList() { return people().filter(function (o) { return o.w.r !== 'W' && o.w.r !== 'C'; }); }
+  // Where the dock stands: at the foot of the side column, within reach of the thumb, and never on the panel.
+  function dockBox(kind) {
+    var S = lay.side, gap = 3, n, cols, rows, size, h;
+    if (kind === 'crew') { n = crewList().length; cols = n > 4 ? 2 : 1; rows = Math.ceil(n / cols); h = 36 + rows * 56 + 2; return { x: S.x, y: S.y + S.h - h, w: S.w, h: h, cols: cols }; }
+    size = Math.floor(Math.min(66, (S.w - 2 - 5 * gap) / 6, (S.h - 92) / 5 - gap));
+    h = 5 * (size + gap) + 5;
+    return { x: S.x, y: S.y + S.h - h, w: S.w, h: h, size: size, gap: gap };
   }
-  function drawSignals(now) {   // what somebody just signalled: big, on every tablet, for a moment
-    var list = ui.sigs, all = api.players(), play = st.phase === 'play', B = play ? lay.main : lay.side, n, size, x, y, i, s, age, p, k;
-    while (list.length && now - list[0].t > 3400) list.shift();
-    n = Math.min(list.length, 4);
-    if (!n) return;
-    size = Math.min(clamp(H / 6.4, 62, 104), (B.w - 20) / n - 8); y = play ? lay.top + size / 2 + 4 : lay.top + lay.pl.r * 2 + 34 + size / 2;
-    for (i = 0; i < n; i++) {
-      s = list[list.length - n + i]; age = now - s.t; p = all[s.id];
-      k = age < 160 ? 0.7 + 0.3 * (age / 160) : 1;
-      x = B.x + B.w / 2 + (i - (n - 1) / 2) * (size + 8);
-      g.globalAlpha = age < 2900 ? 1 : Math.max(0, 1 - (age - 2900) / 500);
-      rr(g, x - size * k / 2 + 3, y - size * k / 2 + 5, size * k, size * k, 20); g.fillStyle = 'rgba(11,20,55,0.35)'; g.fill();
-      rr(g, x - size * k / 2, y - size * k / 2, size * k, size * k, 20); g.fillStyle = '#fff'; g.fill(); g.lineWidth = 9; g.strokeStyle = NAVY; g.stroke(); g.lineWidth = 5; g.strokeStyle = p ? p.color : YEL; g.stroke();
-      sigIcon(g, s.k, s.v, x, y, size * k * 0.3);
-      if (p) api.label(g, p.name, x, y + size * k / 2 + 16, p.color, '#fff', 13);
-      g.globalAlpha = 1;
+  // The board of this tablet: five rows of six. Pictures for the Seer (and the Talker, and anybody outside the cards),
+  // ready-made words for the Sender. At a station with a planet the planets take the row of the symbols (there are none there).
+  function drawBoard(kind, D) {
+    var size = D.size, gap = D.gap, x0 = D.x + (D.w - 6 * size - 5 * gap) / 2, y0 = D.y + 4, k = size / 48, rows, r, c, o, x, y, dp, wd, i, w2, view;
+    rr(g, D.x - 2, D.y - 3, D.w + 4, D.h + 6, 14); g.fillStyle = CREAM; g.fill(); ol(g, 3.5);
+    T = { x: 0, y: 0, s: 1 };
+    function chip(o, x, y, w) {
+      var dp = block(g, 'sg' + o[0] + o[1], x, y, w, size, o[0] === 'x' ? '#E4DCC6' : '#FFFFFF', { r: 12, local: chipSend(o[0], o[1]) });
+      chipIcon(g, o[0], o[1], x + w / 2, y + size / 2 - 3 + dp, size * 0.3);
     }
+    if (kind === 'word') {
+      w2 = size * 3 + gap * 2;
+      for (i = 0; i < 6; i++) {   // the picture first, then the word in three languages as small labels
+        wd = WORDS[i]; x = x0 + (i % 2) * (w2 + gap); y = y0 + Math.floor(i / 2) * (size + gap);
+        dp = block(g, 'sgw' + i, x, y, w2, size, '#FFFFFF', { r: 12, local: chipSend('w', i) });
+        text(g, wd.ico, x + size * 0.46, y + size / 2 - 2 + dp, size * 0.5);
+        pieces(g, [[wd.en, '', 700]], x + size * 0.9, y + size * 0.24 + dp, 13 * k, w2 - size * 0.9 - 6);
+        pieces(g, [[wd.zh + ' ', '', 600], [wd.py, 'py', 500]], x + size * 0.9, y + size * 0.5 + dp, 11 * k, w2 - size * 0.9 - 6);
+        pieces(g, [[wd.ms, '', 600]], x + size * 0.9, y + size * 0.74 + dp, 11 * k, w2 - size * 0.9 - 6);
+      }
+      y = y0 + 3 * (size + gap);
+      for (i = 0; i < 6; i++) chip(['n', i + 1], x0 + i * (size + gap), y, size);
+      y += size + gap; w2 = size * 2 + gap;
+      chip(['y', 1], x0, y, w2); chip(['y', 0], x0 + w2 + gap, y, w2); chip(['x', 0], x0 + 2 * (w2 + gap), y, w2);
+      return;
+    }
+    view = st.phase === 'play' && st.st ? st.st[clamp(ui.view, 0, st.st.length - 1)] : null;
+    rows = PICS.slice();
+    if (view && view.kind === 'switch') rows[1] = PICP;
+    for (r = 0; r < rows.length; r++) for (c = 0; c < 6; c++) { o = rows[r][c]; if (o) chip(o, x0 + c * (size + gap), y0 + r * (size + gap), size); }
+  }
+  // The Captain's crew: a tap gives that player the turn to press. Yellow: holds it. Grey: finished the station before, not twice in a row.
+  function give(id) {
+    var turn = st.turn || {};
+    if (id === turn.id) return;
+    if (id === turn.last) { ui.noAt = Date.now(); api.sfx('deny'); return; }
+    api.send({ t: ID + '.turn', id: id });
+  }
+  function drawCrew(D, now) {
+    var list = crewList(), turn = st.turn || {}, gap = 4, bw = (D.w - 4 - (D.cols - 1) * gap) / D.cols, wait;
+    rr(g, D.x - 2, D.y - 3, D.w + 4, D.h + 6, 14); g.fillStyle = CREAM; g.fill(); ol(g, 3.5);
+    text(g, CARD.C.ico, D.x + 17, D.y + 14, 18);
+    pieces(g, tri3(TXT.who), D.x + 32, D.y + 14, 13, D.w - 40);
+    if (!turn.id) {   // nobody holds the turn: the bar runs down until the server gives it
+      wait = clamp(((turn.wait || 0) - (now - stAt)) / (turn.ms || 6000), 0, 1);
+      rr(g, D.x + 6, D.y + 26, D.w - 12, 5, 2.5); g.fillStyle = 'rgba(27,42,73,0.18)'; g.fill();
+      if (wait > 0.02) { rr(g, D.x + 6, D.y + 26, (D.w - 12) * wait, 5, 2.5); g.fillStyle = RED; g.fill(); }
+    }
+    T = { x: 0, y: 0, s: 1 };
+    list.forEach(function (o, i) {
+      var x = D.x + 2 + (i % D.cols) * (bw + gap), y = D.y + 36 + Math.floor(i / D.cols) * 56, id = o.p.id, has = id === turn.id, bar = !has && id === turn.last, dp;
+      dp = block(g, 'cr' + id, x, y, bw, 52, has ? YEL : bar ? '#D9DEE7' : '#FFFFFF', { r: 16, down: has, local: function () { give(id); } });
+      text(g, roleIcons(o.w.r)[0], x + 24, y + 23 + dp, 22);
+      pieces(g, [[o.p.name, '', 700]], x + 44, y + 23 + dp, 17, bw - 44 - (has || bar ? 36 : 8), bar ? '#7C8597' : NAVY);
+      if (has || bar) text(g, has ? '👆' : '🚫', x + bw - 20, y + 23 + dp, 19);
+    });
+  }
+  // With a Captain, at the head of the side column of every tablet: who holds the turn to press. Returns the room it takes.
+  function drawTurnRow(now) {
+    var S = lay.side, turn = st.turn, all = api.players(), h = H < 560 ? 26 : 30, y = S.y, cy = y + h / 2 + 1, mine, p, w, bump, wait;   // lower on a small screen: three message lines must still fit above a board
+    if (!turn) return 0;
+    mine = !!turn.id && turn.id === api.myId(); p = turn.id ? all[turn.id] : null; w = whoIs(turn.id);
+    bump = mine ? Math.max(0, 1 - (now - ui.mineAt) / 600) * 5 : 0;
+    rr(g, S.x - bump, y - bump, S.w + bump * 2, h + bump * 2, 15); g.fillStyle = mine ? YEL : 'rgba(11,20,55,0.88)'; g.fill(); g.lineWidth = 3; g.strokeStyle = mine ? NAVY : '#fff'; g.stroke();
+    if (mine) { text(g, '👆', S.x + 18, cy, 18); pieces(g, tri3(TXT.turn), S.x + 34, cy, 15, S.w - 44, NAVY); }
+    else if (p) {
+      text(g, '👆', S.x + 18, cy, 17);
+      if (w) text(g, roleIcons(w.r)[0], S.x + 44, cy, 17);
+      pieces(g, [[p.name, '', 700]], S.x + 60, cy, 16, S.w - 70, '#fff');
+    } else {       // free: the Captain is choosing, and the bar shows how long the server waits
+      text(g, CARD.C.ico, S.x + 18, cy, 17);
+      text(g, ['·', '· ·', '· · ·'][Math.floor(now / 350) % 3], S.x + 36, cy - 1, 18, '#fff', 700, 'left');
+      wait = clamp(((turn.wait || 0) - (now - stAt)) / (turn.ms || 6000), 0, 1);
+      rr(g, S.x + 78, cy - 4, S.w - 92, 6, 3); g.fillStyle = 'rgba(255,255,255,0.25)'; g.fill();
+      if (wait > 0.02) { rr(g, S.x + 78, cy - 4, (S.w - 92) * wait, 6, 3); g.fillStyle = YEL; g.fill(); }
+    }
+    return h + 4;
+  }
+  // The message lines: what each player sent, chip after chip, on every tablet. They stay until the player starts a
+  // new line (after a pause), takes it away, or the crew turns to another station.
+  function drawLines(now, top, bottom) {
+    var S = lay.side, all = api.players(), me = api.myId(), gapMs = st.lineMs || 5000, avail = bottom - top, cs = Math.floor(clamp((S.w - 55) / 6, 24, 48)), rows, n, fit, caps, tot, y;
+    var keep = st.phase === 'play';     // while the countdown runs a line stays until the server takes it away; outside it fades after a while
+    ui.order = ui.order.filter(function (id) { var L = ui.lines[id]; if (L && L.chips.length && (keep || now - L.t < 45000) && all[id]) return true; delete ui.lines[id]; return false; });
+    rows = ui.order.slice();
+    if (!rows.length || avail < 34) return;
+    function word(id) { var L = ui.lines[id], c = L.chips[L.chips.length - 1]; return c[0] === 'w' && WORDS[c[1]] ? WORDS[c[1]] : null; }
+    // as many lines as fit with chips that can still be read; when there is not room for all, my own goes first
+    // (I know what I sent), then the one that was added to longest ago
+    for (n = rows.length; n >= 1; n--) { fit = Math.floor(avail / n) - 10; if (fit >= 26 || n === 1) break; }
+    while (rows.length > n) rows.splice(rows.indexOf(me) >= 0 ? rows.indexOf(me) : rows.reduce(function (old, id, i) { return ui.lines[id].t < ui.lines[rows[old]].t ? i : old; }, 0), 1);
+    cs = Math.max(20, Math.min(cs, fit));
+    tot = rows.length * (cs + 10); caps = true;
+    rows.forEach(function (id) { if (word(id)) tot += 15; });
+    if (tot > avail) caps = false;
+    y = top;
+    rows.forEach(function (id) {
+      var L = ui.lines[id], p = all[id], w = whoIs(id), age = now - L.t, rh = cs + 6, wd = caps ? word(id) : null, j, c, k, cx, cy = y + rh / 2;
+      g.globalAlpha = keep || age < 40000 ? 1 : Math.max(0, 1 - (age - 40000) / 5000);
+      rr(g, S.x, y, S.w, rh + (wd ? 15 : 0), 13); g.fillStyle = 'rgba(255,253,244,0.95)'; g.fill(); g.lineWidth = 3; g.strokeStyle = NAVY; g.stroke();
+      // whose line: the colour of the player with the sign of their card (outside a mission the first letter of the name)
+      circ(g, S.x + 19, cy, 14); g.fillStyle = p.color; g.fill(); ol(g, 2.5);
+      if (st.mis && w && w.r !== 'W') text(g, roleIcons(w.r)[0], S.x + 19, cy + 1, 15); else numOn(g, String(p.name).charAt(0).toUpperCase(), S.x + 19, cy + 1, 15, true);
+      for (j = 0; j < L.chips.length; j++) {
+        c = L.chips[j]; k = j === L.chips.length - 1 && now - L.pop < 160 ? 0.7 + 0.3 * (now - L.pop) / 160 : 1;
+        cx = S.x + 38 + j * (cs + 3) + cs / 2;
+        rr(g, cx - cs * k / 2, cy - cs * k / 2, cs * k, cs * k, 10); g.fillStyle = '#fff'; g.fill(); ol(g, 2.5);
+        chipIcon(g, c[0], c[1], cx, cy, cs * k * 0.3);
+      }
+      if (wd) pieces(g, tri3(wd), S.x + 38, y + rh + 6, 12, S.w - 46);      // the newest word, in three languages
+      if (id === me && age < gapMs) { rr(g, S.x + 38, y + rh - 4, (S.w - 46) * (1 - age / gapMs), 3, 1.5); g.fillStyle = GREEN; g.fill(); }   // my line is still open: the next chip goes on it
+      g.globalAlpha = 1;
+      y += rh + (wd ? 15 : 0) + 4;
+    });
   }
 
   // ---------- sparks, notices, confetti ----------
@@ -904,24 +1120,30 @@
       g.globalAlpha = 1;
     }
     age = now - ui.deny;
-    if (age < 1500 && lay.pan && st.phase === 'play') {   // tapped the panel without being Hands: show who is
-      a = people().filter(function (o) { return o.w.r.indexOf('H') >= 0; })[0];
+    if (age < 1500 && lay.pan && st.phase === 'play') {   // tapped the panel without the right to press: show who has it
+      a = people().filter(function (o) { return st.cap ? o.p.id === (st.turn && st.turn.id) : o.w.r.indexOf('H') >= 0; })[0];
       g.globalAlpha = age < 1100 ? 1 : 1 - (age - 1100) / 400;
-      api.label(g, ROLE.H.ico + ' ' + (a ? a.p.name : ''), lay.pan.x + lay.pan.w / 2, lay.pan.y + 44, RED, '#fff', 20);
+      api.label(g, a ? (st.cap ? '👆' : part('H').ico) + ' ' + a.p.name : CARD.C.ico + ' · · ·', lay.pan.x + lay.pan.w / 2, lay.pan.y + 44, RED, '#fff', 20);
       g.globalAlpha = 1;
     }
     age = now - ui.dealt;
     if (age < 2200 && lay.pan && st.phase === 'play') {   // the parts were dealt again because somebody came or went
       g.globalAlpha = age < 1700 ? 1 : 1 - (age - 1700) / 500;
-      api.label(g, roleIcons(myCode()).join(' ') + '  New parts!', lay.main.x + lay.main.w / 2, lay.pan.y + lay.pan.h - 12, YEL, NAVY, 20);
+      api.label(g, roleIcons(myCode()).join(' ') + (cardsOn() ? '  New cards!' : '  New parts!'), lay.main.x + lay.main.w / 2, lay.pan.y + lay.pan.h - 12, YEL, NAVY, 20);
+      g.globalAlpha = 1;
+    }
+    age = now - ui.noAt;
+    if (age < 1600 && st.phase === 'play' && st.me.C) {   // the Captain tapped the one who finished the station before
+      g.globalAlpha = age < 1200 ? 1 : 1 - (age - 1200) / 400;
+      api.label(g, '🚫 Not twice in a row!', lay.side.x + lay.side.w / 2, lay.side.y + lay.side.h * 0.42, RED, '#fff', 17);
       g.globalAlpha = 1;
     }
   }
-  function myCode() { var me = st && st.me; return !me ? 'W' : me.W ? 'W' : (me.H ? 'H' : '') + (me.E ? 'E' : '') + (me.B ? 'B' : ''); }
+  function myCode() { var me = st && st.me; return !me ? 'W' : me.W ? 'W' : me.C ? 'C' : (me.H ? 'H' : '') + (me.E ? 'E' : '') + (me.B ? 'B' : ''); }
 
   // ---------- one frame ----------
   function draw(now) {
-    var phase = st ? st.phase : 'wait', d = 0, dt = Math.min(0.1, (now - (ui.last || now)) / 1000), meta;
+    var phase = st ? st.phase : 'wait', d = 0, dt = Math.min(0.1, (now - (ui.last || now)) / 1000), meta, dk, D, top;
     ui.last = now;
     if (st && st.mis) d = st.mis.d;
     else if (st && st.lobby && ui.sel > 0) { meta = st.lobby.meta[ui.sel - 1]; d = meta ? meta[0] : 0; }
@@ -931,10 +1153,13 @@
     g.drawImage(bgSprite(d % DEST.length), 0, 0, W, H);
     drawSite(now, dt);
     if (!st) return;
-    drawPeople(now);
-    if (phase === 'play' && st.st) { drawPanel(now); drawMarks(now); }
-    if (ui.board) drawBoard();
-    drawSignals(now);
+    dk = dockKind(); D = dk ? dockBox(dk) : null;
+    if (!D) drawPeople(now);              // a board or the Captain's crew stands where the family stands
+    if (phase === 'play' && st.st) { drawPanel(now); drawMarks(now); drawPoints(now); }
+    if (dk === 'crew') drawCrew(D, now); else if (D) drawBoard(dk, D);
+    // the side column from the top: who holds the turn (with a Captain), then the message lines, down to the dock or the family
+    top = phase === 'play' ? lay.side.y + drawTurnRow(now) : lay.side.y + lay.pl.r * 2 + 30;
+    drawLines(now, top, D ? D.y - 5 : lay.gy - 96);
     drawFx(now);
   }
   function frame(ts) {
@@ -950,10 +1175,10 @@
   // ---------- the bar at the top, and when the panels show ----------
   function hud(now) {
     var phase = st ? st.phase : '', play = phase === 'play', left, s, cls, ask, mis, me, txt, want, bar, view, cap = '';
-    show(el.clock, play || phase === 'fail'); show(el.zap, play); show(el.stop, (play || phase === 'brief') && !!st.me && !st.me.W); show(el.mis, !!(st && st.mis)); show(el.sigb, !!st);
+    show(el.clock, play || phase === 'fail'); show(el.zap, play); show(el.stop, (play || phase === 'brief') && !!st.me && !st.me.W); show(el.mis, !!(st && st.mis)); show(el.sigb, !!st && boardKind() !== '');
     if (st && st.mis) {
       mis = st.mis; me = st.me || {};
-      txt = (mis.day ? '📅' : '🚀 ' + mis.n) + ' <i class="rk-pl rk-pl' + mis.d + '"></i> ' + roleIcons(myCode()).join('') + (me.fac ? me.fac.map(function (f) { return FAC[f]; }).join('') : '') + (isQuiet(myCode()) ? '🔇' : '');
+      txt = (mis.day ? '📅' : '🚀 ' + mis.n) + ' <i class="rk-pl rk-pl' + mis.d + '"></i> ' + roleIcons(myCode()).join('') + (me.fac ? me.fac.map(function (f) { return FAC[f]; }).join('') : '') + (silent(myCode()) ? '🔇' : '');
       if (ui.misSig !== txt) { ui.misSig = txt; el.mis.innerHTML = txt; }
     }
     if (play) {
@@ -985,7 +1210,7 @@
     return '<div class="rk-crew">' + st.who.map(function (w) { var p = all[w.id]; return p ? '<span' + (w.id === me ? ' class="me"' : '') + '>' + roleIcons(w.r).join('') + ' ' + api.esc(p.name) + '</span>' : ''; }).join('') + '</div>';
   }
   function lobbyHtml() {
-    var L = st.lobby, tab = ui.ltab, sel = ui.sel, h, i, n, m, li, body = '', info = '', open = sel === 'day' || (L.list[sel - 1] && L.list[sel - 1][0]), alone = st.who.length < 2, myRole;
+    var L = st.lobby, tab = ui.ltab, sel = ui.sel, h, i, n, m, li, body = '', info = '', open = sel === 'day' || (L.list[sel - 1] && L.list[sel - 1][0]), alone = st.who.length < 2, myRole, cards = cardsOn(), picks, mine;
     h = '<div class="rk-h"><span class="rk-ico">🚀</span><div class="rk-ttl"><h2>Rocket Base</h2><div class="rk-tri">火箭基地 <span class="py">huǒjiàn jīdì</span> · Pangkalan Roket</div></div>' +
       '<button type="button" class="btn primary rk-go" data-act="go" data-quiet' + (open && tab !== 'board' ? '' : ' disabled') + '>Start 🚀</button></div>';
     h += '<div class="rk-tabs">' + DEST.map(function (D, d) { return '<button type="button" class="rk-tab' + (tab === d ? ' on' : '') + '" data-act="tab" data-v="' + d + '"><i class="rk-pl rk-pl' + d + '"></i>' + D.en + '</button>'; }).join('') +
@@ -1013,33 +1238,52 @@
       body += '</div>';
       m = L.meta[sel - 1]; li = L.list[sel - 1];
       if (m) info = '<div class="rk-info"><div><b>Mission ' + sel + '</b> · ' + three(DEST[m[0]]) + '</div>' +
-        (li[0] ? '<div>🔧 ' + m[1] + (m[1] > 1 ? ' stations' : ' station') + ' · ⏱ ' + mmss(m[2] * 1000) + ' · ⭐ ' + m[3] + (li[1] ? '' : ' <small>(+' + m[4] + ' first launch)</small>') + (m[5] ? ' · 🔇 quiet mission' : '') + '</div>' : '<div>🔒 Launch mission ' + (sel - 1) + ' first.</div>') +
+        (li[0] ? '<div>🔧 ' + m[1] + (m[1] > 1 ? ' stations' : ' station') + ' · ⏱ ' + mmss(m[2] * 1000) + ' · ⭐ ' + m[3] + (li[1] ? '' : ' <small>(+' + m[4] + ' first launch)</small>') + (m[5] ? (cards ? ' · 📻 radio silence' : ' · 🔇 quiet mission') : '') + '</div>' : '<div>🔒 Launch mission ' + (sel - 1) + ' first.</div>') +
         (m[6] ? '<div class="rk-new">New: ' + three(STN[m[6]]) + '</div>' : '') +
         (li[2] || li[3] ? '<div>' + (li[2] ? 'My best ⏱ ' + mmss(li[2]) + ' ' + medals(li[1]) : '') + (li[3] ? ' · Family ⏱ ' + mmss(li[3]) : '') + '</div>' : '') + '</div>';
     }
     myRole = myCodeOf(api.myId());
+    // the part (with three or more: the card) I would like; the Captain only when there are four
+    picks = !cards ? [['', '🎲', 'Any'], ['hands', ROLE.H.ico, 'Hands'], ['eyes', ROLE.E.ico, 'Eyes'], ['book', ROLE.B.ico, 'Book']]
+      : [['', '🎲', ''], ['book', CARD.B.ico, CARD.B.en], ['eyes', CARD.E.ico, CARD.E.en], ['hands', CARD.H.ico, CARD.H.en]].concat(st.who.length >= 4 ? [['cap', CARD.C.ico, CARD.C.en]] : []);
+    mine = part(myRole.charAt(0));
     h += body + info +
-      '<div class="rk-roles"><span>My part:</span>' + [['', '🎲', 'Any'], ['hands', ROLE.H.ico, 'Hands'], ['eyes', ROLE.E.ico, 'Eyes'], ['book', ROLE.B.ico, 'Book']].map(function (o) {
-        return '<button type="button" class="chip' + (st.pref === o[0] ? ' on' : '') + '" data-act="role" data-r="' + o[0] + '">' + o[1] + ' ' + o[2] + '</button>';
+      '<div class="rk-roles' + (picks.length > 4 ? ' five' : '') + (lay.main.w < 500 ? ' tight' : '') + '"><span>' + (cards ? 'My card:' : 'My part:') + '</span>' + picks.map(function (o) {
+        return '<button type="button" class="chip' + (st.pref === o[0] ? ' on' : '') + '" data-act="role" data-r="' + o[0] + '"' + (o[2] ? '' : ' aria-label="Any card"') + '>' + o[1] + (o[2] ? ' ' + o[2] : '') + '</button>';
       }).join('') + '</div>' +
       crewHtml() +
       (alone ? '<div class="rk-note">🎓 <b>Training</b> · 训练 <span class="py">xùnliàn</span> · Latihan: alone you have every part, a long countdown and half the stars.</div>'
-        : '<div class="rk-tri">' + myRole.split('').map(function (c) { return ROLE[c].ico + ' ' + three(ROLE[c]); }).join(' + ') + '</div>') +
-      '<div class="rk-how"><span>✋</span><em>presses, sees only grey</em><i>+</i><span>👀</span><em>sees the panel</em><i>+</i><span>📖</span><em>has the rules</em><i>›</i><span>💬</span><i>›</i><span>🚀</span></div>' +
+        : cards ? '<div class="rk-tri rk-mine">' + mine.ico + ' ' + three(mine) + (mine.how ? ' <small>— ' + mine.how + '</small>' : '') + '</div>'
+          : '<div class="rk-tri">' + myRole.split('').map(function (c) { return ROLE[c].ico + ' ' + three(ROLE[c]); }).join(' + ') + '</div>') +
+      (cards ? '<div class="rk-how"><span>' + CARD.B.ico + '</span><em>talks, has the rules</em><i>+</i><span>' + CARD.E.ico + '</span><em>sees, sends pictures</em><i>+</i><span>' + CARD.H.ico + '</span><em>presses, sends words</em>' +
+          (st.who.length >= 4 ? '<i>+</i><span>' + CARD.C.ico + '</span><em>picks who presses</em>' : '') + '<i>›</i><span>🚀</span></div>'
+        : '<div class="rk-how"><span>✋</span><em>presses, sees only grey</em><i>+</i><span>👀</span><em>sees the panel</em><i>+</i><span>📖</span><em>has the rules</em><i>›</i><span>💬</span><i>›</i><span>🚀</span></div>') +
       '<div class="rk-note rk-more">Repeat launches that pay in full today: ' + L.reps + ' of ' + L.cap + '. A first launch always pays in full.</div>';
     return h;
   }
+  function cardTip(c) {   // the one line of a card on the briefing
+    var t = CARD[c].tip;
+    if (c === 'B' && st.mis.quiet === 'R') t = 'You have the rule book. No talking: show the rule with pictures 📣!';
+    if (st.cap && c === 'H') t += ' Press when the Captain gives you the turn 👆!';       // with a Captain nobody presses without the turn
+    if (st.cap && (c === 'E' || c === 'B')) t += ' The Captain may give you the turn 👆!';
+    return t;
+  }
   function myCodeOf(id) { var k; for (k = 0; k < st.who.length; k++) if (st.who[k].id === id) return st.who[k].r; return 'W'; }
   function briefHtml() {
-    var mis = st.mis, code = myCode(), q = mis.quiet, parts;
+    var mis = st.mis, code = myCode(), q = mis.quiet, cards = cardsOn(), parts, quiet = '';
     parts = (code === 'W' ? ['W'] : code.split('')).map(function (c) {
       var extra = c === 'E' && st.me.fac ? ' You see only: ' + st.me.fac.map(function (f) { return FAC[f] + ' ' + { col: 'colours', sym: 'symbols', num: 'numbers', lit: 'lights' }[f]; }).join(', ') + '.' : '';
-      return '<div class="rk-part"><span class="rk-pico">' + ROLE[c].ico + '</span><div>' + three(ROLE[c]) + '<small>' + ROLE[c].tip + extra + '</small></div></div>';
+      var R = part(c), card = cards && CARD[c], mute = silent(c);
+      // a card: the big sign, the name, one line, and on the right whether this card talks
+      return '<div class="rk-part"><span class="rk-pico">' + R.ico + '</span><div>' + three(R) + '<small>' + (card ? cardTip(c) : R.tip) + extra + '</small></div>' +
+        (card ? '<span class="rk-talk' + (mute ? ' no' : '') + '" aria-label="' + (mute ? 'No talking' : 'May talk') + '">' + (mute ? '🔇' : CARD.B.ico) + '</span>' : '') + '</div>';
     }).join('');
+    if (q === 'R') quiet = '<div class="rk-quiet">📻 <b>' + TXT.radio.en + '</b> · ' + TXT.radio.zh + ' <span class="py">' + TXT.radio.py + '</span> · ' + TXT.radio.ms +
+      '<small>Nobody talks' + (st.cap ? ', only the Captain ' + CARD.C.ico : '') + ': the Talker shows the rules with pictures 📣. (+2 ⭐)</small></div>';
+    else if (q && ROLE[q]) quiet = '<div class="rk-quiet">🔇 <b>Quiet mission</b> · 安静任务 <span class="py">ānjìng rènwu</span> · Misi Senyap<small>' + ROLE[q].ico + ' ' + ROLE[q].en + ' may only use the signal board 📣, no talking! (+2 ⭐)</small></div>';
     return '<div class="rk-h"><span class="rk-ico">' + (mis.day ? '📅' : '🚀') + '</span><div class="rk-ttl"><h2>' + (mis.day ? 'Mission of the day' : 'Mission ' + mis.n) + (mis.train ? ' · Training' : '') + '</h2><div class="rk-tri">' + three(DEST[mis.d]) +
       (mis.train ? ' · 训练 <span class="py">xùnliàn</span> · Latihan' : '') + '</div></div></div>' +
-      '<div class="rk-you">' + parts + '</div>' +
-      (q ? '<div class="rk-quiet">🔇 <b>Quiet mission</b> · 安静任务 <span class="py">ānjìng rènwu</span> · Misi Senyap<small>' + ROLE[q].ico + ' ' + ROLE[q].en + ' may only use the signal board 📣, no talking! (+2 ⭐)</small></div>' : '') +
+      '<div class="rk-you">' + parts + '</div>' + quiet +
       crewHtml() + '<div class="rk-bar"><i></i></div>';
   }
   function resultHtml() {
@@ -1054,7 +1298,7 @@
       '<div class="rk-res">' + medals(res.medals, true) + '<div class="rk-big">⏱ ' + mmss(res.used) + (mine && mine.best ? '<span class="rk-badge">New best!</span>' : '') + (res.rec ? '<span class="rk-badge">Family record!</span>' : '') + '</div></div>';
     if (mine) {
       if (mine.cap) note = 'Today\'s repeat launches are used up: ⭐ 1 each. A first launch still pays in full.';
-      else note = (mis.train ? 'Training pays half. ' : '') + (mine.first ? 'With the bonus for the first launch!' : '') + (mis.quiet && !mis.train ? ' Quiet mission: +2.' : '');
+      else note = (mis.train ? 'Training pays half. ' : '') + (mine.first ? 'With the bonus for the first launch!' : '') + (mis.quiet && !mis.train ? (mis.quiet === 'R' ? ' Radio silence: +2.' : ' Quiet mission: +2.') : '');
       h += '<div class="rk-sum">' + (mine.parts.length > 1 ? mine.parts.join(' + ') + ' = ' : '') + mine.n + ' ⭐' + (note ? '<small>' + note + '</small>' : '') + '</div>';
     } else h += '<div class="rk-note">You watched this one. You are in the next mission!</div>';
     return h + '<div class="rk-btns">' + (nextOpen ? '<button type="button" class="btn primary" data-act="start" data-n="' + res.next + '" data-quiet>Mission ' + res.next + ' ▶</button>' : '') +
@@ -1070,14 +1314,20 @@
 
   // ---------- messages from the server ----------
   function onState(m, now) {
-    var prev = st, was = prev ? prev.phase : '', i, L, code;
+    var prev = st, was = prev ? prev.phase : '', old = ui.lines, i, L, code;
     st = m; stAt = now;
+    // the message lines as the server has them (a chip that comes later brings its line along)
+    ui.lines = {};
+    (m.lines || []).forEach(function (l) {
+      ui.lines[l.id] = { chips: l.line, t: now - l.age, pop: old[l.id] ? old[l.id].pop : 0 };
+      if (ui.order.indexOf(l.id) < 0) ui.order.push(l.id);
+    });
     if (m.phase !== was) {
       ui.phaseAt = now; ui.hold = null; ui.hud.sec = 0;
       if (m.phase === 'brief') { ui.briefMs = m.brief || 4500; api.sfx('open'); ui.board = false; }
       if (m.phase === 'play') {
-        ui.view = m.focus; ui.tab = 'panel'; ui.marks = {}; ui.ang = {}; ui.slide = {}; ui.spin = {}; ui.blink0 = now; ui.readyAt = 0;
-        ui.board = isQuiet(myCode());       // on a quiet mission the signal board is open for the quiet one
+        ui.view = m.focus; ui.tab = 'panel'; ui.marks = {}; ui.ang = {}; ui.slide = {}; ui.spin = {}; ui.points = []; ui.blink0 = now; ui.readyAt = 0;
+        ui.board = wantBoard();             // whoever is asked not to talk has their board open
         if (was === 'brief') api.sfx('car');
       }
       if (m.phase === 'launch') {
@@ -1100,15 +1350,18 @@
         if (m.st[prev.focus] && m.st[prev.focus].done && !prev.st[prev.focus].done && ui.view === prev.focus) ui.hold = { until: now + 1100 };   // let the finished station be seen for a moment
         else { ui.view = m.focus; ui.hold = null; ui.blink0 = now; ui.ang = {}; ui.slide = {}; }
       }
-      code = function (s) { return JSON.stringify([s.me, (s.pages || []).map(function (p) { return [p.st, p.rows.length]; })]); };
-      if (code(m) !== code(prev)) { ui.dealt = now; api.sfx('claim'); if (!m.me.B || (!m.me.E && !m.me.H)) ui.tab = 'panel'; }
+      code = function (s) { var e = s.me; return JSON.stringify([e.H, e.E, e.B, e.C, e.W, e.fac, s.cards, (s.pages || []).map(function (p) { return [p.st, p.rows.length]; })]); };
+      if (code(m) !== code(prev)) { ui.dealt = now; api.sfx('claim'); if (!m.me.B || (!m.me.E && !m.me.H)) ui.tab = 'panel'; ui.board = wantBoard(); }
+      if (m.me.T && !prev.me.T) { ui.tab = 'panel'; if (m.cap) ui.mineAt = now; }   // the turn came to me: the panel, not the book
     }
+    layout();     // the side column is wider while the countdown runs or a board is open
     panel();
   }
+  function wantBoard() { return st.phase === 'play' && silent(myCode()) && boardKind() !== ''; }
   function ctlAt(id) { for (var i = 0; i < ctls.length; i++) if (ctls[i].id === id) return ctls[i]; return null; }
   function onMessage(m) {
     if (!root) return;
-    var now = Date.now(), k;
+    var now = Date.now(), k, p;
     if (m.t === ID + '.state') onState(m, now);
     else if (m.t === ID + '.touch') {
       ui.hop[m.id] = now;
@@ -1121,8 +1374,21 @@
       ui.pops.push({ s: '⚡ −' + m.cost + ' s', x: W / 2, y: lay.top + 34, t: now, bg: '#FFE55C' });
       api.sfx('wrong');
     } else if (m.t === ID + '.ready') { ui.readyAt = now; api.sfx('right'); }
-    else if (m.t === ID + '.sig') { ui.sigs.push({ id: m.id, k: m.k, v: m.v, t: now }); if (ui.sigs.length > 12) ui.sigs.shift(); ui.hop[m.id] = now; api.sfx('emote'); }
-    else if (m.t === ID + '.no') api.sfx('deny');
+    else if (m.t === ID + '.sig') {      // a chip: it comes with the whole line of that player
+      ui.lines[m.id] = { chips: Array.isArray(m.line) && m.line.length ? m.line : [[m.k, m.v]], t: now, pop: now };
+      if (ui.order.indexOf(m.id) < 0) ui.order.push(m.id);
+      ui.hop[m.id] = now; api.sfx('emote');
+    } else if (m.t === ID + '.clear') delete ui.lines[m.id];
+    else if (m.t === ID + '.point') {    // the Seer points at a control
+      ui.points.push({ at: String(m.at), st: m.st, id: m.id, t: now });
+      if (ui.points.length > 6) ui.points.shift();
+      ui.hop[m.id] = now; api.sfx('card');
+    } else if (m.t === ID + '.turn') {   // with a Captain: the turn to press was given (auto: by the server, the Captain took too long)
+      p = api.players()[m.id];
+      ui.turnAt = now;
+      if (m.id === api.myId()) { ui.mineAt = now; ui.tab = 'panel'; api.sfx('tagit'); } else api.sfx('card');
+      if (p) ui.pops.push({ s: (m.auto ? '⏱ ' : '') + '👆 ' + p.name, x: lay.main.x + lay.main.w / 2, y: lay.top + 34, t: now, bg: m.id === api.myId() ? YEL : '#fff' });
+    } else if (m.t === ID + '.no') { if (m.why === 'twice') ui.noAt = now; api.sfx('deny'); }
   }
 
   // ---------- taps ----------
@@ -1134,7 +1400,15 @@
       e.preventDefault();
       if (k.local) { ui.press[k.id] = Date.now(); api.sfx('tap'); k.local(); return; }
       if (!st || st.phase !== 'play' || !k.msg) return;
-      if (!st.me.H) { ui.deny = Date.now(); api.sfx('deny'); return; }      // only Hands can press
+      if (!st.me.T) {
+        if (!canPoint()) { ui.deny = Date.now(); api.sfx('deny'); return; }      // only Hands, or with a Captain the holder of the turn, can press
+        if (ui.view !== st.focus || ui.hold || st.st[st.focus].done) return;
+        api.sfx('tap');                    // a Seer points at the control instead: it pulses on every tablet that shows the panel
+        m = { t: ID + '.point', a: k.msg.a };
+        if (k.msg.i !== undefined) m.i = k.msg.i;
+        api.send(m);
+        return;
+      }
       if (ui.view !== st.focus || ui.hold || st.st[st.focus].done) return;
       ui.press[k.id] = Date.now(); api.sfx('tap');
       m = { t: ID + '.act', a: k.msg.a };
@@ -1150,7 +1424,7 @@
       if (act) {
         if (t.disabled) return;
         if (act === 'back') { api.sfx('close'); close(); }
-        else if (act === 'board') ui.board = !ui.board;
+        else if (act === 'board') { ui.board = !ui.board; layout(); panel(); }
         else if (act === 'stop') { if (Date.now() - ui.stopAsk < 3000) { ui.stopAsk = 0; api.send({ t: ID + '.stop' }); } else ui.stopAsk = Date.now(); }   // the second tap stops the countdown
         else if (act === 'tab') { v = t.getAttribute('data-v'); ui.ltab = v === 'day' || v === 'board' ? v : parseInt(v, 10); if (v === 'day') ui.sel = 'day'; else if (v !== 'board') ui.sel = firstOpen(ui.ltab); panel(); }
         else if (act === 'sel') { v = t.getAttribute('data-n'); ui.sel = v === 'day' ? 'day' : parseInt(v, 10); panel(); }
@@ -1174,13 +1448,14 @@
     if (root) return;
     if (!document.getElementById(ID + '-style')) { var css = document.createElement('style'); css.id = ID + '-style'; css.textContent = CSS; document.head.appendChild(css); }
     ui = freshUi(); st = null; lastDraw = 0;
+    if (!signs) { signs = true; pickSigns(); }
     root = document.createElement('div'); root.className = 'screen rk-root';
     root.innerHTML = '<canvas class="rk-cv" aria-label="Rocket Base"></canvas>' +
       '<div class="rk-top">' +
       '<button type="button" class="btn rk-back" data-act="back" data-quiet>Back to town</button>' +
       '<div class="rk-pill rk-mis" hidden></div>' +
       '<div class="rk-mid"><div class="rk-pill rk-clock" hidden>0:00</div><div class="rk-pill rk-zap" hidden>⚡ 0</div></div>' +
-      '<button type="button" class="round rk-sigb" data-act="board" aria-label="Signal board" hidden>📣</button>' +
+      '<button type="button" class="round rk-sigb" data-act="board" aria-label="My board: pictures or words to send" hidden>📣</button>' +
       '<button type="button" class="round rk-stop" data-act="stop" aria-label="Stop this mission" hidden>✖</button>' +
       '</div>' +
       '<div class="rk-cap" hidden></div>' +
