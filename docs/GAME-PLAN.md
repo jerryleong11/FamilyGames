@@ -52,6 +52,7 @@ Saves (name, look, car, stars, gallery) live on the laptop, so progress survives
 | **Monopoly (大富翁)** | Quick game: a 24-space town board, one die, 10 rounds. Big game: 36 spaces, two dice with doubles, four building levels, auctions, swaps, mortgages, two card decks, town events, 15 to 30 rounds. Both: robots, paying with notes and getting change. |
 | **Escape Room** | Four rooms per run from ten puzzle kinds; each tablet holds different clues, so the family has to talk. |
 | **Home Street** | Your own house and garden: buy and place items, visit each other, give hearts. |
+| **Rocket Base (火箭基地)** | Get a rocket ready before the countdown ends, by talking: Hands presses the controls but sees only grey shapes, Eyes sees the real panel but cannot press, Book has the picture rules. 18 missions to the Moon, Mars and Saturn made from nine kinds of station, a mission of the day, medals and a family board. One player can train alone; with four to eight players the parts are split further. |
 
 ## Ideas not built yet
 

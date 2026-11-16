@@ -133,6 +133,20 @@ The owner asked for a boy to choose in Dress-Up. The work was paused once on his
   - A Girl / Boy switch at the top of the designer applies that body's starter look; each list shows the chosen body's typical options first; "Surprise me" picks from them. All options stay open to both bodies.
   - Every existing option must draw exactly as before (saved outfits), and the shop logic in the file must keep working.
 
+### Rocket Base (2026-11-16, in `dev/`, see git log for whether it is released)
+
+The owner asked for an original game of the "talk it through" kind: the one who can press the controls cannot see what they mean, and the ones who know cannot press. The theme is a rocket launch. Nothing is taken from an existing game and nothing blows up: a wrong press is a spark that costs seconds, and out of time means the launch is postponed.
+
+- **Parts:** Hands presses but sees only grey shapes, Eyes sees the real panel but cannot press, Book has the picture rules of the mission. The server sends each tablet only what its part may know and checks every press.
+  - One player trains alone (double countdown, half the stars). Two share: Hands, and Eyes + Book on two tabs. Three have one part each. Four to eight split Eyes by colours / symbols / numbers / lights and Book by chapter.
+  - Parts rotate every mission (never the same Hands twice running) and can be asked for in the lobby. A leaver's part is dealt again at once; a late joiner watches until the next mission.
+- **Content:** 18 missions (Moon, Mars, Saturn) made of 1 to 6 stations from nine kinds with new values every time, a mission of the day, three medals, best times, a family board, a signal board of picture buttons, and quiet missions where one part may only use the signal board (+2 stars).
+- **Maths inside play:** counting drops per colour, adding symbol values for a dial, switching on cells that add up to a target, odd / even / bigger / smaller, weighing crates against barrels.
+- **Stars:** 4 to 12 by the number of stations, a medal bonus, a bonus for the first launch of a mission. Five repeat launches a day pay in full, then 1 star. Daily quests `rocket.launch` and `rocket.team`.
+- **How it is built:** `dev/games/rocket.js` and `dev/public/games/rocket.js`, by one agent. The core got only the building (west end of the main street), the id in `GAMES`, the icons and the script tag. Saved under `profile.rocket` and `save.rocket`.
+- **Tests** (scratch scripts, not in the repository): 794 checks against a mock api, 16,000 random steps with about 100,000 invariant checks, a protocol test over real sockets with 53 checks. Every message to every simulated tablet was scanned: nothing of Eyes or Book reached a Hands tablet and no answer left the server. The committed copy was also run against a copy of the live save: every record survived and all eight games opened.
+- **Looked at** in a desktop browser at 1280x800 and 800x480 with two tabs: one whole mission played (a wrong press, then lift-off and the stars), a second one started. **Not tried:** real tablets and touch, sound, three or more real players, most station kinds at the higher levels. Known: with 7 to 8 players the 800x480 lobby scrolls slightly, a running mission is lost if the server restarts, there is no hint system, the Saturn countdowns are untuned.
+
 ## 9. Practical notes
 
 - One-time setup on the laptop: install Node.js LTS, allow Node through Windows Firewall on Private networks, reserve a fixed IP for the laptop in the router.
