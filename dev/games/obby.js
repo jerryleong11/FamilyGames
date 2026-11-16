@@ -1,9 +1,16 @@
 // Obby Tower (server). Two towers of hand-made stages in chapters of six, each stage starting at a checkpoint flag,
-// and four ways to play them: Climb (the towers at your own pace), Race (a chapter, everybody at once),
-// Rising lava (how high before the lava gets you) and the Endless tower (a new tower every day, made by code).
+// and five ways to play them: Climb (the towers at your own pace), Race (a chapter, everybody at once),
+// Rising lava (how high before the lava gets you), the Endless tower (a new tower every day, made by code) and
+// Rope Team (two to four climbers tied together by a stretchy rope climb a chapter as one team).
 // The running and jumping happens on the tablets (positions are trusted, like town movement); the server owns
 // everything that pays out: which flags a climb has reached and in which order, the stars, the clocks, the rounds,
 // the records and the family leaderboards.
+//
+// Rope Team: the rope itself is worked out on every tablet (each one pulls its own climber toward the neighbours it
+// hears about), so the positions of roped climbers are passed on at once instead of ten times a second. The server
+// decides what counts: a flag is the team's only when everybody who is tied stands on it at the same time, and when
+// the whole team is under its last flag everybody goes back to that flag together. Whoever leaves or loses the
+// connection is untied at once (and tied in again when the connection comes back while the round is on).
 //
 //   profile.obby = { easy: { ... }, hard: { ... }, race: { ... }, lava: { ... }, endless: { ... } }
 //   per tower:
@@ -17,14 +24,20 @@
 //   race    = { day, paid, n, wins, ghost: { easy0: { ms, s } ... } }   paid races today, races, wins, best race of a chapter with its recording
 //   lava    = { day, paid, n, wins, best: { easy, hard } }              paid rounds today, rounds, wins, highest climb in metres
 //   endless = { day, top, paid, n, best, bday }                        today's highest flag and stars, climbs, highest flag ever and its day
+//   rope    = { day, paid, n, wins, flags }                             paid rope rounds today, rounds, chapters finished, team flags reached
 //   save.obby = { easy: [], hard: [],                     the 5 best times of the family for the first 12 stages (as before)
-//                 full: { easy, hard }, chap: { easy: [[] x 5], hard }, race: [], lava: { easy, hard }, endless: { day, today, all } }
+//                 full: { easy, hard }, chap: { easy: [[] x 5], hard }, race: [], lava: { easy, hard }, endless: { day, today, all },
+//                 rope: { easy: [[] x 5], hard },         the best team times of each chapter (key = the team's names)
+//                 ropeTop: { easy, hard } }               the highest flag a rope team has reached (opens the chapters for everybody)
 //
 // Messages from a tablet:  obby.start { tower, from } | { mode: 'endless' }   obby.go   obby.pos { x, y, f, m }   obby.flag { i }
 //                          obby.quit   obby.ready { mode, tower, ch, on }   obby.watch { mode }   obby.out   obby.ghost { s }
+//                          roped: obby.pos has also { s (what I am doing), vx, vy, r0, r1 (rope taken in or given), on (the platform
+//                          I stand on), fl (the flag I stand on) }
 // Messages to a tablet:    obby.hello  obby.run  obby.flag  obby.done  obby.me  obby.lb  obby.who  obby.st
 //                          obby.pt (who is ready)  obby.rk (a round as it stands)  obby.fin (my race)  obby.out (the lava got me)
 //                          obby.res (a round is over)  obby.over (my endless climb is over)
+//                          obby.tf (a flag for the rope team)  obby.tr (the rope team goes back to its flag)
 'use strict';
 module.exports = function (api) {
   const ID = api.id;
@@ -34,11 +47,11 @@ module.exports = function (api) {
   // The stage layouts live in public/games/obby.js: keep `stages` and `h` (the height of every stage) the same as there.
   //   flag = stars for a new flag, chest = stars for the rest platform of each chapter the first time (chest[1] is what the
   //   top of the 12-stage tower paid: `first`), rep = stars for a chapter climbed again, race = [winner, finisher],
-  //   lava = stars per flag in a lava round
+  //   lava = stars per flag in a lava round, rope = [stars per team flag, on top for the last flag of the chapter]
   const TOWERS = {
-    easy: { stages: 30, flag: 1, first: 10, again: 3, chest: [4, 10, 6, 8, 12], rep: 2, race: [4, 2], lava: 0.5, name: 'Easy Tower',
+    easy: { stages: 30, flag: 1, first: 10, again: 3, chest: [4, 10, 6, 8, 12], rep: 2, race: [4, 2], lava: 0.5, rope: [1, 3], name: 'Easy Tower',
       h: [372, 340, 366, 366, 366, 430, 362, 366, 430, 490, 372, 396, 372, 372, 372, 372, 372, 394, 372, 372, 502, 372, 372, 434, 600, 600, 700, 580, 600, 700] },
-    hard: { stages: 30, flag: 2, first: 20, again: 6, chest: [8, 20, 12, 14, 20], rep: 4, race: [6, 3], lava: 0.75, name: 'Hard Tower',
+    hard: { stages: 30, flag: 2, first: 20, again: 6, chest: [8, 20, 12, 14, 20], rep: 4, race: [6, 3], lava: 0.75, rope: [2, 3], name: 'Hard Tower',
       h: [420, 420, 420, 520, 420, 420, 420, 420, 504, 420, 504, 588, 420, 420, 420, 420, 420, 554, 420, 420, 420, 420, 504, 504, 680, 680, 760, 760, 680, 780] }
   };
   const MIN_FLAG_MS = 1200;      // no stage can be climbed faster (a perfect run of the shortest stage takes 1.4 s)
@@ -60,9 +73,16 @@ module.exports = function (api) {
   // the lava: starts h0 units under the ground, rises with v0 units a second and gets faster by a every second
   const LAVA = { easy: { h0: 300, v0: 16, a: 0.24 }, hard: { h0: 320, v0: 13, a: 0.18 } };
   const GHOST_MAX = 6000;        // longest recording of a race that is kept (characters)
+  const ROPE_MIN = 2;            // a rope team needs this many climbers
+  const ROPE_PER_DAY = 4;        // paid rope rounds per day
+  const ROPE_MAX_MS = 12 * 60000;
+  const ROPE_WAIT_MS = 12000;    // with one climber left, a teammate who lost the connection has this long to come back
+  const ROPE_FLOOR = 170;        // the whole team this far under its last flag (world units, as on the tablets) has fallen ...
+  const ROPE_FALL_MS = 350;      // ... once it has been down there for this long
+  const ROPE_FRESH_MS = 900;     // a position older than this does not count for a team flag
 
   const runs = {};               // player key -> the climb in progress (kept by key: ids change on reconnect)
-  const parties = { race: party('race'), lava: party('lava') };
+  const parties = { race: party('race'), lava: party('lava'), rope: party('rope') };
   let ticker = null, lastPurge = 0;
 
   function int(v, a, b) { v = parseInt(v, 10); return api.clamp(isFinite(v) ? v : 0, a, b); }
@@ -102,7 +122,7 @@ module.exports = function (api) {
     d.ch.length = n / CHAP;
     return d;
   }
-  // the player's saved numbers for a way to play ('race', 'lava', 'endless'); a new day starts the daily counts again
+  // the player's saved numbers for a way to play ('race', 'lava', 'endless', 'rope'); a new day starts the daily counts again
   function mdata(p, mode) {
     const a = all(p);
     if (!a) return null;
@@ -113,6 +133,7 @@ module.exports = function (api) {
     d.n = int(d.n, 0, 1e9);
     if (mode === 'endless') { d.top = int(d.top, 0, ENDLESS_N); d.best = int(d.best, 0, ENDLESS_N); if (typeof d.bday !== 'string') d.bday = ''; }
     else d.wins = int(d.wins, 0, 1e9);
+    if (mode === 'rope') d.flags = int(d.flags, 0, 1e9);
     if (mode === 'race' && !obj(d.ghost)) d.ghost = {};
     if (mode === 'lava') { if (!obj(d.best)) d.best = {}; d.best.easy = int(d.best.easy, 0, 1e6); d.best.hard = int(d.best.hard, 0, 1e6); }
     if (d.day !== day) { d.day = day; d.paid = 0; if (mode === 'endless') d.top = 0; }
@@ -126,10 +147,14 @@ module.exports = function (api) {
     if (!obj(b.full)) b.full = {};
     if (!obj(b.chap)) b.chap = {};
     if (!obj(b.lava)) b.lava = {};
+    if (!obj(b.rope)) b.rope = {};
+    if (!obj(b.ropeTop)) b.ropeTop = {};
     Object.keys(TOWERS).forEach(function (t) {
       b.full[t] = list(b.full[t]); b.lava[t] = list(b.lava[t]);
       if (!Array.isArray(b.chap[t])) b.chap[t] = [];
-      for (let i = 0; i < TOWERS[t].stages / CHAP; i++) b.chap[t][i] = list(b.chap[t][i]);
+      if (!Array.isArray(b.rope[t])) b.rope[t] = [];
+      for (let i = 0; i < TOWERS[t].stages / CHAP; i++) { b.chap[t][i] = list(b.chap[t][i]); b.rope[t][i] = list(b.rope[t][i]); }
+      b.ropeTop[t] = int(b.ropeTop[t], 0, TOWERS[t].stages);
     });
     b.race = list(b.race);
     if (!obj(b.endless)) b.endless = {};
@@ -152,12 +177,14 @@ module.exports = function (api) {
     return list(l).slice(0, size).map(function (e) { const o = { name: String(e.name || '?'), key: String(e.key || '') }; o[field] = int(e[field], 0, 1e9); return o; });
   }
   function boardMsg() {
-    const b = board(), out = { full: {}, chap: {}, lava: {} };
+    const b = board(), out = { full: {}, chap: {}, lava: {}, rope: {}, ropeTop: {} };
     Object.keys(TOWERS).forEach(function (t) {
       out[t] = rows(b[t], 'ms', BOARD);                       // the first 12 stages (the old board)
       out.full[t] = rows(b.full[t], 'ms', BOARD);
       out.chap[t] = b.chap[t].map(function (l) { return rows(l, 'ms', CBOARD); });
       out.lava[t] = rows(b.lava[t], 'h', BOARD);
+      out.rope[t] = b.rope[t].map(function (l) { return rows(l, 'ms', CBOARD); });
+      out.ropeTop[t] = b.ropeTop[t];
     });
     out.race = rows(b.race, 'wins', BOARD);
     out.endless = { day: b.endless.day, today: rows(b.endless.today, 'n', BOARD), all: rows(b.endless.all, 'n', BOARD) };
@@ -170,7 +197,8 @@ module.exports = function (api) {
       const d = data(p, t);
       if (d) m[t] = { top: d.top, cur: d.cur, best: d.best, fin: d.fin, full: d.full, tops: d.tops, ch: d.ch.slice(), left: CH_PER_DAY - (d.cd === day ? d.cp : 0) };
     });
-    const r = mdata(p, 'race'), l = mdata(p, 'lava'), e = mdata(p, 'endless');
+    const r = mdata(p, 'race'), l = mdata(p, 'lava'), e = mdata(p, 'endless'), t = mdata(p, 'rope');
+    if (t) m.rope = { left: ROPE_PER_DAY - t.paid, wins: t.wins, n: t.n, flags: t.flags };
     if (r) {
       m.race = { left: RACE_PER_DAY - r.paid, wins: r.wins, n: r.n, best: {} };
       Object.keys(r.ghost).forEach(function (k) { if (obj(r.ghost[k])) m.race.best[k] = int(r.ghost[k].ms, 0, 1e9); });
@@ -186,10 +214,12 @@ module.exports = function (api) {
   function runMsg(r, now) {
     const m = { mode: r.mode, tower: r.tower, flag: r.flag, from: r.from, end: r.end, timed: r.timed, ct: r.ct, fin: r.fin, out: !!r.out, over: !!r.over, watch: !!r.watch,
       el: r.t0 ? now - r.t0 : r.timed && r.go ? now - r.go : -1, cel: r.c0 ? now - r.c0 : r.ct && r.go ? now - r.go : -1 };
-    if (r.party) { m.at = r.party.at; m.n = r.party.n; if (r.mode === 'lava') m.lava = LAVA[r.tower]; }
+    if (r.party) { m.at = r.party.at; m.n = r.party.n; if (r.mode === 'lava') m.lava = LAVA[r.tower]; if (r.mode === 'rope') m.team = teamMsg(r.party); }
     if (r.mode === 'endless') m.seed = r.day;
     return m;
   }
+  // a rope team as it stands: its flag, how often it went back to it, and the number of the last time (so no tablet does it twice)
+  function teamMsg(P) { return { flag: P.flag, from: P.from, end: P.end, falls: P.falls, seq: P.seq, pay: TOWERS[P.tower].rope }; }
   function whoList() {
     const out = [];
     Object.keys(runs).forEach(function (k) { const r = runs[k]; if (r.id && !r.watch && !r.over && !r.out) out.push([r.id, place(r), r.flag, r.fin ? 1 : 0, r.tower]); });
@@ -208,9 +238,16 @@ module.exports = function (api) {
   }
   function sendParty() { api.broadcast(partyMsg(), api.inRoom(ID)); }
   // a round as it stands, for everybody in it: [id, name, flag, time of arrival, out, metres]
+  // (a rope team: in the order they are tied; out = not on the rope any more)
   function sendRank(P) {
     const l = Object.keys(P.members).map(function (key) { const mb = P.members[key]; return [mb.id, mb.name, mb.flag, mb.fin, mb.out ? 1 : 0, mb.h]; });
-    Object.keys(runs).forEach(function (k) { const r = runs[k]; if (r.party === P && r.id) { const pl = api.players.get(r.id); if (pl) api.send(pl, { t: ID + '.rk', mode: P.mode, list: l }); } });
+    const msg = { t: ID + '.rk', mode: P.mode, list: l };
+    if (P.mode === 'rope') msg.team = teamMsg(P);
+    toParty(P, msg);
+  }
+  // to everybody in a round, climbing or watching
+  function toParty(P, msg, but) {
+    Object.keys(runs).forEach(function (k) { const r = runs[k]; if (r.party === P && r.id && r !== but) { const pl = api.players.get(r.id); if (pl) api.send(pl, msg); } });
   }
 
   // climbs of players who lost the connection wait a few minutes, then they are forgotten
@@ -232,6 +269,7 @@ module.exports = function (api) {
       const r = runs[k];
       if (!r.id) return;
       any = true;
+      if (r.mode === 'rope') return;       // roped climbers hear of each other with every step (see 'pos')
       if (r.pos && !r.watch && !r.out && !r.over) (by[place(r)] = by[place(r)] || []).push([r.id, r.x, r.y, r.f, r.m]);
     });
     if (!any) {
@@ -310,23 +348,29 @@ module.exports = function (api) {
     return stars;
   }
 
-  // ---------- Race and Rising lava: rounds for everybody who pressed Ready ----------
+  // ---------- Race, Rising lava and Rope Team: rounds for everybody who pressed Ready ----------
   // players at the entrance (not in the middle of a climb)
   function idle() { return api.roomList(ID).filter(function (pl) { return !active(runs[pl.key]); }); }
+  // who is ready and can start right now
+  function readyNow(P) { return api.roomList(ID).filter(function (pl) { return P.ready[pl.key] && !active(runs[pl.key]); }); }
   function begin(P, now) {
-    const race = P.mode === 'race', start = race ? P.ch * CHAP : 0, end = race ? start + CHAP : TOWERS[P.tower].stages;
-    const who = api.roomList(ID).filter(function (pl) { return P.ready[pl.key] && !active(runs[pl.key]); });
+    const race = P.mode === 'race', rope = P.mode === 'rope', chap = race || rope;      // a race and a rope round are one chapter
+    const start = chap ? P.ch * CHAP : 0, end = chap ? start + CHAP : TOWERS[P.tower].stages;
+    const who = readyNow(P).slice(0, rope ? 4 : 99);
     P.ready = {}; P.next = null;
-    if (!who.length) { P.state = 'idle'; sendParty(); return; }
+    if (who.length < (rope ? ROPE_MIN : 1)) { P.state = 'idle'; sendParty(); return; }
     // whoever still watches the last round goes back to the entrance
     Object.keys(runs).forEach(function (k) { const r = runs[k]; if (r.party === P) { const pl = r.id && api.players.get(r.id); delete runs[k]; if (pl && !who.some(function (w) { return w.key === k; })) api.send(pl, { t: ID + '.run', mode: P.mode, gone: true }); } });
     P.members = {}; P.n = who.length; P.done = 0; P.firstFin = 0; P.lastOut = 0; P.at = now + COUNT_MS; P.state = 'run';
+    if (rope) { P.flag = start; P.from = start; P.end = end; P.falls = 0; P.seq = 0; P.lastFlagAt = P.at; P.below = 0; P.calm = 0; P.won = false; P.ms = 0; }
     who.forEach(function (pl) {
-      P.members[pl.key] = { key: pl.key, name: pl.name, id: pl.id, flag: start, fin: 0, out: false, safe: false, outAt: 0, h: 0, stars: 0, place: 0, paid: false, under: 0 };
+      P.members[pl.key] = { key: pl.key, name: pl.name, id: pl.id, flag: start, fin: 0, out: false, safe: false, outAt: 0, h: 0, stars: 0, place: 0, paid: false, under: 0,
+        at: -1, seen: 0, flags: 0, gone: 0, left: false, counted: false };
       runs[pl.key] = { mode: P.mode, tower: P.tower, flag: start, from: start, end: end, timed: false, ct: false, t0: 0, c0: 0, go: 0, made: now, lastAt: P.at, id: pl.id, gone: 0, fin: false,
         x: 0, y: 0, f: 1, m: 0, pos: false, hmax: 0, party: P };
       const m = { t: ID + '.run', mode: P.mode, tower: P.tower, flag: start, end: end, at: P.at, now: now, n: P.n };
-      if (!race) m.lava = LAVA[P.tower];
+      if (rope) m.team = teamMsg(P);
+      else if (!race) m.lava = LAVA[P.tower];
       else if (P.n === 1) {      // alone: against the ghost of the best race of this chapter
         const g = mdata(pl, 'race').ghost[P.tower + P.ch];
         if (obj(g) && g.ms > 0) m.ghost = { ms: int(g.ms, 0, 1e9), s: typeof g.s === 'string' ? g.s : '' };
@@ -339,12 +383,18 @@ module.exports = function (api) {
     if (P.state === 'gather') {
       Object.keys(P.ready).forEach(function (key) { if (!online(key)) delete P.ready[key]; });
       if (!Object.keys(P.ready).length) { P.state = 'idle'; sendParty(); return; }
+      if (P.mode === 'rope') {
+        // a rope needs two: one climber alone waits (no countdown) until somebody joins
+        if (readyNow(P).length < ROPE_MIN) { if (P.startAt) { P.startAt = 0; sendParty(); } return; }
+        if (!P.startAt) { P.startAt = now + GATHER_MS / 2; sendParty(); }
+      }
       // everybody at the entrance is ready: no need to wait for more
       if (P.startAt > now + ALL_READY_MS && idle().every(function (pl) { return P.ready[pl.key]; })) { P.startAt = now + ALL_READY_MS; sendParty(); }
       if (now >= P.startAt) begin(P, now);
       return;
     }
     if (P.state !== 'run') return;
+    if (P.mode === 'rope') { ropeTick(P, now); return; }
     const keys = Object.keys(P.members);
     if (P.mode === 'race') {
       const open = keys.filter(function (k) { const mb = P.members[k]; return !mb.fin && !mb.out; });
@@ -394,6 +444,7 @@ module.exports = function (api) {
     if (rec || rank) sendBoard();
   }
   function endRound(P, now) {
+    if (P.mode === 'rope') { ropeEnd(P, now); return; }
     const keys = Object.keys(P.members), race = P.mode === 'race', start = race ? P.ch * CHAP : 0;
     let order;
     if (race) {
@@ -420,6 +471,10 @@ module.exports = function (api) {
     order.forEach(function (mb, i) { mb.place = i + 1; });
     const res = { t: ID + '.res', mode: P.mode, tower: P.tower, ch: P.ch, n: P.n,
       rows: order.map(function (mb) { return { name: mb.name, key: mb.key, flag: mb.flag, ms: mb.fin, h: mb.h, place: mb.place, stars: mb.stars, safe: mb.safe, done: race ? mb.fin > 0 : true }; }) };
+    closeRound(P, res, now);
+  }
+  // everybody in the round hears how it went; the next round gathers when some are ready for it already
+  function closeRound(P, res, now) {
     Object.keys(runs).forEach(function (k) {
       const r = runs[k];
       if (r.party !== P) return;
@@ -473,6 +528,101 @@ module.exports = function (api) {
     return 0;
   }
 
+  // ---------- Rope Team: tied together, one chapter, all or nobody ----------
+  function tied(P) { return Object.keys(P.members).filter(function (k) { return !P.members[k].out; }); }
+  function ropeTick(P, now) {
+    let ch = false;
+    // whoever lost the connection is untied at once: the others must not be held by a rope nobody is on
+    Object.keys(P.members).forEach(function (k) {
+      const mb = P.members[k], r = runs[k];
+      if (mb.left || mb.gone) return;
+      if (!r || r.party !== P || !r.id) { mb.gone = now; mb.out = true; mb.at = -1; ch = true; }
+    });
+    const on = tied(P);
+    if (on.length < ROPE_MIN) {
+      // one climber left: the round is over, unless a teammate is only away for a moment
+      const back = Object.keys(P.members).some(function (k) { const mb = P.members[k]; return mb.gone && !mb.left && now - mb.gone < ROPE_WAIT_MS; });
+      if (!on.length || !back) { ropeEnd(P, now); return; }
+    }
+    if (now > P.at + ROPE_MAX_MS) { ropeEnd(P, now); return; }
+    if (ch) { sendRank(P); sendWho(); sendParty(); }
+    if (now < P.at || on.length < ROPE_MIN) return;
+    // the next flag is the team's when everybody on the rope stands on it at the same time
+    const next = P.flag + 1;
+    if (now - P.lastFlagAt >= MIN_FLAG_MS && on.every(function (k) { const mb = P.members[k]; return mb.at === next && now - mb.seen < ROPE_FRESH_MS; })) { ropeFlag(P, now); return; }
+    // everybody under the last flag: the team has fallen and goes back to that flag together
+    if (P.flag > 0 && now > P.calm) {
+      const floor = -baseOf(P.tower, P.flag) + ROPE_FLOOR;
+      if (on.every(function (k) { const r = runs[k]; return r && r.pos && r.y > floor; })) {
+        if (!P.below) P.below = now;
+        else if (now - P.below >= ROPE_FALL_MS) ropeBack(P, now);
+      } else P.below = 0;
+    }
+  }
+  function ropeFlag(P, now) {
+    const cfg = TOWERS[P.tower], b = board(), top = P.flag + 1 >= P.end, h0 = Math.round(baseOf(P.tower, P.flag) / 10);
+    P.flag++; P.lastFlagAt = now; P.below = 0;
+    const h = Math.round(baseOf(P.tower, P.flag) / 10), note = { t: ID + '.tf', i: P.flag, stars: 0, top: top, h0: h0, h: h };
+    if (P.flag > b.ropeTop[P.tower]) b.ropeTop[P.tower] = P.flag;
+    tied(P).forEach(function (k) {
+      const mb = P.members[k], r = runs[k], pl = online(k);
+      mb.flag = P.flag; mb.flags++; mb.at = -1;
+      if (r) { r.flag = P.flag; r.lastAt = now; }
+      if (!pl) return;
+      const md = mdata(pl, 'rope');
+      if (!mb.paid) { mb.paid = true; md.n++; if (md.paid < ROPE_PER_DAY) { md.paid++; mb.counted = true; } }     // the round counts with its first flag
+      const stars = mb.counted ? cfg.rope[0] + (top ? cfg.rope[1] : 0) : 0;
+      md.flags++;
+      if (top) md.wins++;
+      mb.stars += stars;
+      if (stars > 0) api.addStars(pl, stars);
+      api.questEvent(pl, ID + '.flag');
+      api.questEvent(pl, ID + '.rope');
+      if (mb.flags === 3) api.questEvent(pl, ID + '.mode');
+      api.send(pl, { t: ID + '.tf', i: P.flag, stars: stars, top: top, h0: h0, h: h, left: ROPE_PER_DAY - md.paid });
+      api.send(pl, meMsg(pl));
+    });
+    // whoever watches sees the flag too
+    Object.keys(runs).forEach(function (k) { const r = runs[k]; if (r.party === P && r.watch && r.id) { const pl = api.players.get(r.id); if (pl) api.send(pl, note); } });
+    api.saveSoon();
+    if (top) { P.won = true; P.ms = Math.max(1, now - P.at); ropeEnd(P, now); return; }
+    sendRank(P); sendWho(); sendParty(); sendBoard();
+  }
+  // the whole team is under its last flag: everybody starts again from that flag (nothing else is lost)
+  function ropeBack(P, now) {
+    P.falls++; P.seq++; P.below = 0; P.calm = now + 1500;
+    tied(P).forEach(function (k) { P.members[k].at = -1; });
+    toParty(P, { t: ID + '.tr', flag: P.flag, seq: P.seq, falls: P.falls });
+    sendRank(P);
+  }
+  // a climber leaves the rope for good (back to the entrance or to town); the stars of the flags are paid already
+  function ropeLeft(P, mb, pl) {
+    if (mb.left) return;
+    mb.left = true; mb.out = true; mb.at = -1;
+    if (pl && !mb.paid) { mb.paid = true; mdata(pl, 'rope').n++; api.saveSoon(); api.send(pl, meMsg(pl)); }
+    sendRank(P); sendParty();
+  }
+  function ropeEnd(P, now) {
+    const keys = Object.keys(P.members), got = P.flag - P.from, on = tied(P);
+    let rank = 0, rec = false, best = 0;
+    keys.forEach(function (k) {
+      const mb = P.members[k], pl = online(k);
+      if (!mb.paid && pl) { mb.paid = true; mdata(pl, 'rope').n++; api.send(pl, meMsg(pl)); }
+    });
+    if (P.won && on.length) {
+      // the team's time for the chapter: one line for the same climbers, whatever the order they were tied in
+      const team = on.map(function (k) { return P.members[k]; }).sort(function (a, b) { return a.key < b.key ? -1 : 1; });
+      const who = { key: team.map(function (mb) { return mb.key; }).join('+'), name: team.map(function (mb) { return mb.name; }).join(' + ') };
+      const l = board().rope[P.tower][P.ch], old = l.filter(function (e) { return e && e.key === who.key; })[0];
+      rec = !old || P.ms < old.ms;
+      rank = put(l, who, 'ms', P.ms, true, CBOARD);
+      best = old && old.ms < P.ms ? old.ms : P.ms;
+    }
+    const res = { t: ID + '.res', mode: 'rope', tower: P.tower, ch: P.ch, n: P.n, won: !!P.won, flags: got, of: P.end - P.from, ms: P.won ? P.ms : 0, falls: P.falls, rec: rec, rank: rank, best: best,
+      rows: keys.map(function (k) { const mb = P.members[k]; return { name: mb.name, key: mb.key, flag: mb.flags, ms: 0, h: 0, place: mb.out ? 2 : 1, stars: mb.stars, safe: false, done: !mb.out, out: !!mb.out }; }) };
+    closeRound(P, res, now);
+  }
+
   // ---------- the Endless tower: a new one every day ----------
   function endlessFlag(p, r, i) {
     const md = mdata(p, 'endless'), b = board(), out = { t: ID + '.flag', ok: true, i: i, stars: 0, first: false, rec: false };
@@ -509,6 +659,7 @@ module.exports = function (api) {
     if (r.mode === 'endless' && !r.fin) { endlessOver(p, r, false); return; }
     if (mb && P.state === 'run' && !r.over && !r.watch) {
       if (r.mode === 'lava') lavaOut(P, mb, r, Date.now());
+      else if (r.mode === 'rope') { delete runs[p.key]; ropeLeft(P, mb, p); return; }
       else if (!mb.fin) { mb.out = true; mb.left = true; sendRank(P); }
     }
     delete runs[p.key];
@@ -531,12 +682,17 @@ module.exports = function (api) {
       const r = runs[p.key];
       if (r) {                   // back after a dropped connection: the climb goes on
         r.id = p.id; r.gone = 0;
-        if (r.party && r.party.members[p.key]) r.party.members[p.key].id = p.id;
+        if (r.party && r.party.members[p.key]) {
+          const mb = r.party.members[p.key];
+          mb.id = p.id;
+          // back on the rope: the round is still on and the climber did not leave it on purpose
+          if (r.mode === 'rope' && mb.gone && !mb.left && !r.over && r.party.state === 'run') { mb.gone = 0; mb.out = false; mb.at = -1; }
+        }
         startTicker();
       }
       api.send(p, {
         t: ID + '.hello', now: now, towers: TOWERS, chap: CHAP, perDay: CH_PER_DAY, day: api.today(), endlessN: ENDLESS_N,
-        caps: { race: RACE_PER_DAY, lava: LAVA_PER_DAY, lavaMax: LAVA_MAX, lavaWin: LAVA_WIN, endless: ENDLESS_STARS },
+        caps: { race: RACE_PER_DAY, lava: LAVA_PER_DAY, lavaMax: LAVA_MAX, lavaWin: LAVA_WIN, endless: ENDLESS_STARS, rope: ROPE_PER_DAY, ropeMin: ROPE_MIN },
         me: meMsg(p), lb: boardMsg(), who: whoList(), pt: partyMsg(), run: r ? runMsg(r, now) : null
       });
       if (r) { sendWho(); if (r.party && r.party.state === 'run') sendRank(r.party); }
@@ -594,12 +750,26 @@ module.exports = function (api) {
     r.m = int(m.m, 0, 2);
     r.pos = true;
     if (-r.y > r.hmax) r.hmax = -r.y;
+    if (r.mode !== 'rope' || !r.party) return;
+    // Roped: what the climber is doing, how fast, how much rope was taken in, and the flag stood on. The others on the
+    // rope (and whoever watches) hear it right away: every tablet works out the pull on its own climber from this.
+    const P = r.party, mb = P.members[p.key], fl = parseInt(m.fl, 10);
+    r.s = int(m.s, 0, 255);
+    r.vx = Math.round(api.clamp(+m.vx || 0, -3000, 3000)); r.vy = Math.round(api.clamp(+m.vy || 0, -3000, 3000));
+    r.r0 = int(m.r0, -999, 999); r.r1 = int(m.r1, -999, 999); r.on = int(m.on, -1, 99999);
+    if (mb && !mb.out) {
+      // "I stand on the next flag" counts only at the height of that flag
+      mb.at = fl === P.flag + 1 && fl <= P.end && Math.abs(r.y + baseOf(P.tower, fl)) <= 12 ? fl : -1;
+      mb.seen = Date.now();
+    }
+    toParty(P, { t: ID + '.st', p: [[r.id, r.x, r.y, r.f, r.m, r.s, r.vx, r.vy, r.r0, r.r1, r.on]] }, r);
   });
   // "I am at flag i". Flags count only in order, one after the other, and never faster than a stage can be climbed.
   api.on('flag', function (p, m) {
     if (p.room !== ID || !m) return;
     const r = runs[p.key], now = Date.now();
     if (!r || r.id !== p.id || r.watch) { api.send(p, { t: ID + '.flag', ok: false, none: true }); return; }
+    if (r.mode === 'rope') return;       // a rope team's flags are decided here, from where everybody stands
     const i = parseInt(m.i, 10);
     if (r.fin || r.over || r.out || i !== r.flag + 1 || i > r.end) { api.send(p, { t: ID + '.flag', ok: false, i: r.flag }); return; }
     if (now - r.lastAt < MIN_FLAG_MS) { api.send(p, { t: ID + '.flag', ok: false, i: r.flag, wait: MIN_FLAG_MS - (now - r.lastAt) }); return; }
@@ -626,12 +796,15 @@ module.exports = function (api) {
     if (!P || active(r)) return;
     if (m.on === false || m.on === 0) { if (unready(p)) sendParty(); return; }
     if (P.state === 'idle' || (P.state === 'run' && !Object.keys(P.ready).length)) {
-      const tower = towerOf(m.tower), ch = P.mode === 'race' ? int(m.ch, 0, TOWERS.easy.stages / CHAP - 1) : 0;
+      const rope = P.mode === 'rope';
+      const tower = towerOf(m.tower), ch = P.mode === 'race' || rope ? int(m.ch, 0, TOWERS.easy.stages / CHAP - 1) : 0;
       if (!tower) return;
       if (P.mode === 'race') { const d = data(p, tower); if (!d || d.top < ch * CHAP) return; }      // only a chapter the player has reached
-      if (P.state === 'idle') { P.tower = tower; P.ch = ch; P.state = 'gather'; P.startAt = Date.now() + GATHER_MS; }
+      // a rope team: a chapter the player has reached, or one that any rope team has reached
+      if (rope) { const d = data(p, tower); if (!d || (d.top < ch * CHAP && board().ropeTop[tower] < ch * CHAP)) return; }
+      if (P.state === 'idle') { P.tower = tower; P.ch = ch; P.state = 'gather'; P.startAt = rope ? 0 : Date.now() + GATHER_MS; }
       else P.next = { tower: tower, ch: ch };
-      api.toast(p.name + (P.mode === 'race' ? ' wants to race! 🏁' : ' dares the lava! 🌋'), function (o) { return o.room === ID && o.id !== p.id; });
+      api.toast(p.name + (P.mode === 'race' ? ' wants to race! 🏁' : rope ? ' wants a rope team! 🤝' : ' dares the lava! 🌋'), function (o) { return o.room === ID && o.id !== p.id; });
     }
     Object.keys(parties).forEach(function (k) { if (parties[k] !== P && parties[k].ready[p.key]) { delete parties[k].ready[p.key]; if (parties[k].state === 'gather' && !Object.keys(parties[k].ready).length) parties[k].state = 'idle'; } });
     P.ready[p.key] = p.name;
@@ -644,10 +817,11 @@ module.exports = function (api) {
     const P = parties[m.mode], r = runs[p.key];
     if (!P || P.state !== 'run' || active(r)) return;
     if (r) endRun(p, r);
-    const race = P.mode === 'race', start = race ? P.ch * CHAP : 0;
-    runs[p.key] = { mode: P.mode, tower: P.tower, flag: start, from: start, end: race ? start + CHAP : TOWERS[P.tower].stages, watch: true, id: p.id, gone: 0, fin: false, x: 0, y: 0, f: 1, m: 0, pos: false, hmax: 0, party: P, made: Date.now(), lastAt: 0 };
-    const msg = { t: ID + '.run', mode: P.mode, tower: P.tower, flag: start, end: runs[p.key].end, at: P.at, now: Date.now(), n: P.n, watch: true };
-    if (!race) msg.lava = LAVA[P.tower];
+    const race = P.mode === 'race', rope = P.mode === 'rope', start = race || rope ? P.ch * CHAP : 0;
+    runs[p.key] = { mode: P.mode, tower: P.tower, flag: rope ? P.flag : start, from: start, end: race || rope ? start + CHAP : TOWERS[P.tower].stages, watch: true, id: p.id, gone: 0, fin: false, x: 0, y: 0, f: 1, m: 0, pos: false, hmax: 0, party: P, made: Date.now(), lastAt: 0 };
+    const msg = { t: ID + '.run', mode: P.mode, tower: P.tower, flag: runs[p.key].flag, end: runs[p.key].end, at: P.at, now: Date.now(), n: P.n, watch: true };
+    if (rope) msg.team = teamMsg(P);
+    else if (!race) msg.lava = LAVA[P.tower];
     api.send(p, msg);
     startTicker();
     sendRank(P);
@@ -673,4 +847,7 @@ module.exports = function (api) {
     en: 'Reach {n} flags in the Obby Tower', zh: '在障碍塔到达 {n} 面旗子', py: 'zài zhàng\'ài tǎ dàodá {n} miàn qízi', ms: 'Sampai ke {n} bendera di Menara Halangan' });
   api.addQuest({ type: ID + '.mode', icon: '🌋', solo: true, tiers: [[2, 5], [3, 7], [4, 9]],
     en: 'Play {n} rounds of Race, Lava or Endless in the Obby Tower', zh: '在障碍塔玩 {n} 局比赛、岩浆或无尽塔', py: 'zài zhàng\'ài tǎ wán {n} jú bǐsài, yánjiāng huò wújìn tǎ', ms: 'Main {n} pusingan Lumba, Lava atau Menara Tanpa Henti di Menara Halangan' });
+  // (not solo: a rope team needs two climbers)
+  api.addQuest({ type: ID + '.rope', icon: '🤝', tiers: [[3, 6], [5, 8], [8, 10]],
+    en: 'Reach {n} flags tied together as a Rope Team in the Obby Tower', zh: '在障碍塔和队友用绳子连着到达 {n} 面旗子', py: 'zài zhàng\'ài tǎ hé duìyǒu yòng shéngzi liánzhe dàodá {n} miàn qízi', ms: 'Sampai ke {n} bendera bersama Pasukan Tali di Menara Halangan' });
 };

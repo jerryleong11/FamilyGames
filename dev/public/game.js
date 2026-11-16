@@ -181,11 +181,43 @@
     try { if (joined) sessionStorage.setItem('ft_auto', '1'); } catch (e) {} // come straight back into the town after the update
     setTimeout(function () { location.reload(); }, 1200);
   }
+  // ---------- which version is this? ----------
+  // A small label in the bottom left corner of the join screen and the town: the version this tablet runs and when it
+  // was released, with a tick when that is the newest. It turns amber when it is not: a newer release is waiting for the
+  // live server to be restarted, or (on the test copy in dev/) files changed after the server started or after this page
+  // was loaded. An older server that says nothing about this just shows its version.
+  var pubAtLoad = 0;
+  function whenTxt(t) {
+    var d = new Date(t), M = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'], m;
+    if (!t || isNaN(d.getTime())) return '';
+    m = d.getMinutes();
+    return d.getDate() + ' ' + M[d.getMonth()] + ' ' + d.getHours() + ':' + (m < 10 ? '0' : '') + m;
+  }
+  function showVersion(s) {
+    var el = $('ver'), txt, warn = '', t;
+    if (!el || !s || !s.version) return;
+    if (s.version === 'dev') {
+      if (s.pub && !pubAtLoad) pubAtLoad = s.pub;       // the page files as they were when this page was loaded
+      t = whenTxt(Math.max(s.srv || 0, s.pub || 0));
+      txt = 'dev' + (t ? ' · ' + t : '');
+      if (s.srv && s.started && s.srv > s.started) warn = 'server files changed: restart start-dev';
+      else if (s.pub && pubAtLoad && s.pub > pubAtLoad) warn = 'page files changed: reload this page';
+    } else {
+      t = whenTxt(s.released);
+      txt = s.version + (t ? ' · ' + t : '');
+      if (s.latest && s.latest !== s.version) warn = s.latest + ' is ready: restart start-live';
+    }
+    el.textContent = txt + (warn ? '  ⚠ ' + warn : ' ✓') + (!warn && s.version === 'dev' && s.latest ? '  (live: ' + s.latest + ')' : '');
+    el.className = 'ver' + (warn ? ' warn' : '');
+    el.hidden = false;
+  }
   function checkRelease() {
     var x = new XMLHttpRequest(); x.open('GET', '/api/status?' + Date.now()); x.timeout = 4000;
     x.onload = function () {
-      var v = null; try { v = JSON.parse(x.responseText).version; } catch (e) {}
+      var s = null, v; try { s = JSON.parse(x.responseText); } catch (e) {}
+      v = s && s.version;
       if (!v) return;
+      showVersion(s);
       if (!version) version = v; else if (v !== version) newRelease();
     };
     x.send();

@@ -18,6 +18,39 @@ let VERSION = 'dev';
 try { VERSION = JSON.parse(fs.readFileSync(path.join(__dirname, 'version.json'), 'utf8')).version || 'dev'; } catch (e) {}
 fs.mkdirSync(GAL, { recursive: true });
 
+// ---------- which copy of the game is this? (for the version label on the tablets, see /api/status) ----------
+// released: when this copy was frozen (a release only). latest: the release live.json wants to be live; while it is not
+// VERSION, the live server still has to be restarted. On the working copy in dev/ (the only one whose files change
+// while a server runs): srv / pub = when a server file / a page file last changed, started = when this server started.
+const STARTED = Date.now();
+let RELEASED = '';
+try { RELEASED = String(JSON.parse(fs.readFileSync(path.join(__dirname, 'version.json'), 'utf8')).released || ''); } catch (e) {}
+function latestRelease() {
+  // live.json is two folders up from a release (releases/vN) and one up from dev/
+  const dirs = [path.join(__dirname, '..', '..'), path.join(__dirname, '..')];
+  for (let i = 0; i < dirs.length; i++) {
+    try { const v = JSON.parse(fs.readFileSync(path.join(dirs[i], 'live.json'), 'utf8')).version; if (v) return String(v); } catch (e) {}
+  }
+  return '';
+}
+const changes = { at: 0, srv: 0, pub: 0 };
+function lastChanges() {
+  const now = Date.now();
+  if (VERSION !== 'dev' || now - changes.at < 5000) return changes;     // a release never changes; else look every 5 s at most
+  changes.at = now; changes.srv = 0; changes.pub = 0;
+  (function walk(dir, depth, key) {
+    let list = [];
+    try { list = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { return; }
+    list.forEach(function (n) {
+      if (n.name === 'node_modules' || n.name === 'data' || n.name.charAt(0) === '.') return;
+      const f = path.join(dir, n.name);
+      if (n.isDirectory()) { if (depth < 4) walk(f, depth + 1, key || (f === PUB ? 'pub' : '')); return; }
+      try { const t = Math.round(fs.statSync(f).mtimeMs); if (t > changes[key || 'srv']) changes[key || 'srv'] = t; } catch (e) {}
+    });
+  })(__dirname, 0, '');
+  return changes;
+}
+
 // ---------- saved data (lives on the laptop, not on the tablets) ----------
 let save = { profiles: {}, family: 0, gallery: [] };
 try { save = Object.assign(save, JSON.parse(fs.readFileSync(SAVE_FILE, 'utf8'))); } catch (e) {}
@@ -574,7 +607,9 @@ const server = http.createServer(function (req, res) {
   const url = decodeURIComponent(req.url.split('?')[0]);
   if (url === '/api/status') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ version: VERSION, players: players.size, names: Array.from(players.values()).map(function (p) { return p.name; }) }));
+    const ch = lastChanges();
+    res.end(JSON.stringify({ version: VERSION, players: players.size, names: Array.from(players.values()).map(function (p) { return p.name; }),
+      released: RELEASED, latest: latestRelease(), started: STARTED, srv: ch.srv, pub: ch.pub }));
     return;
   }
   if (url === '/api/shutdown' && process.env.TEST_SHUTDOWN) { // test servers only: lets a test stop its own server

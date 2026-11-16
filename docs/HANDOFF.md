@@ -107,7 +107,9 @@ Sections 4 to 7 describe release v1. This is what changed in Claude Code on the 
 - **Known small problems reported by the builders:** crowded name tags with five or more players at 800x480 (Escape Room, Race Track); the BOOST button covers the end of the two near lanes at 800x480; solo Monopoly with two robots lasts about 5 minutes; dragging items by touch in Home Street must start sideways (tap-then-tap always works); in Pet Home at 800x480 an open panel covers most of the Back to town button (the panel has its own close button).
 - The backlog in section 7 is done except the unscheduled ideas in item 7.
 - **v4 (released):** everything in the list above.
-- **v5 (released, live):** pinch zoom of the town and the town map (`map.js`): mini map, big map with each person's area, guide arrow.
+- **v5 (released):** pinch zoom of the town and the town map (`map.js`): mini map, big map with each person's area, guide arrow.
+- **v6 (released 2026-11-16):** the three deeper games and the boy in Dress-Up (both below).
+- **v7 (released 2026-11-16, live from the next start of the live server):** Rope Team in the Obby Tower, the version label and Rocket Base (all below). The frozen copy was run against a copy of the live save: every record survived and all eight games opened. Not yet played on the tablets.
 
 ### Three games made deeper (2026-11-16, in `dev/`, see git log for whether it is released)
 
@@ -132,6 +134,33 @@ The owner asked for a boy to choose in Dress-Up. The work was paused once on his
   - `defaults(1)` gives the boy starter look from free options only: hair 6, dress 6, head 0, back 0, item 5.
   - A Girl / Boy switch at the top of the designer applies that body's starter look; each list shows the chosen body's typical options first; "Surprise me" picks from them. All options stay open to both bodies.
   - Every existing option must draw exactly as before (saved outfits), and the shop logic in the file must keep working.
+
+### Rope Team in the Obby Tower (2026-11-16, in `dev/`, see git log for whether it is released)
+
+The owner sent a video of a co-op climbing game in which the players are chained to each other and asked what could be made of it. The answer was an original mode for the existing tower; only the idea of being tied together is used, no name, look, setting or level piece of that game.
+
+- **What it is:** a fifth tab at the tower entrance, "🤝 Rope". Two to four climbers who pressed Ready are tied in a line and climb one chapter (six flags) of the Easy or the Hard tower as one team. Alone the card is grey: it takes two.
+- **Rules:**
+  - A flag is the team's only when everybody on the rope stands on it at the same time (dots over the next flag show who is there). The server decides this.
+  - Whoever falls hangs on the rope. They get up again by tapping jump (climbs the rope), by a teammate holding **Pull**, or by a teammate walking away from the edge (the rope runs over the platform edge).
+  - The weight of somebody hanging drags whoever stands above toward the edge; **Hold** plants the feet.
+  - When the whole team is under its last flag, everybody goes back to that flag together. Nothing else is lost. Things that hurt knock a roped climber over instead of sending them to a flag.
+  - A tablet that drops off the Wi-Fi is untied at once and tied in again if it comes back while the round is on; with one climber left the round waits 12 s, then ends and pays.
+  - The rope lets go at a door until the two are together again, gives extra length after a bounce pad, and is 1.5 times as long in the space chapter. No stage was changed or left out.
+- **Stars:** Easy 1 per team flag and 3 for the top of the chapter, Hard 2 and 3; four paid rounds a day. A daily quest counts team flags (not a solo quest). The family board keeps the best team time of each chapter; a chapter is open when the player or any rope team has reached it.
+- **Maths inside play:** the screen shows the height of the lowest climber and the metres to the next flag; a team flag shows the sum of the heights (`0 m + 37 m = 37 m`).
+- **How it is built:** in `dev/games/obby.js` and `dev/public/games/obby.js` only. Each tablet works out the pull of the rope on its own climber from what it hears of its neighbours (`ropeBefore` / `ropeAfter` beside `step`); the server passes roped positions on at once instead of ten times a second. The other ways to play are simulated exactly as before (checked against the released file).
+- **Tests** (scratch scripts, not in the repository): two and three simulated tablets on the rope with network delay, 41 checks; a protocol test with up to four players, 80 checks; the earlier Obby protocol test, 131 checks; every one of the 60 stages with a roped pair, using the earlier stage solver. All passing.
+- **Looked at** in a desktop browser at 1024x600 and 800x480 with a scripted second climber. **Not tried:** real tablets and real fingers, the children, four climbers at once, the Hard tower and the space chapter in a browser. The feel is tuned in simulation only; the numbers to change are `ROPE` in the client file (length 220, stretch 60, how hard weight drags, pull speed) and `ROPE_PER_DAY` and the `rope` pair in `TOWERS` in the server file.
+
+### A version label on the tablets (2026-11-16, in `dev/`, see git log for whether it is released)
+
+The owner asked to see on the tablet whether it runs the latest deployment.
+
+- A small label in the bottom left corner of the join screen and the town (not inside the games): the version and when it was released, with a tick, for example `v7 · 16 Nov 10:52 ✓`.
+- It turns amber when the tablet is not on the newest: `⚠ v8 is ready: restart start-live` (a release was made or rolled back, the live server still runs the old one). On the test copy (port 3001) it shows `dev`, the time of the last file change and the live release, and warns `server files changed: restart start-dev` or `page files changed: reload this page`.
+- How: `/api/status` also returns `released`, `latest` (from `live.json`), `started`, `srv`, `pub`; `showVersion` in `game.js` draws the label from the status check that already runs every 20 s. Files: `dev/server.js`, `dev/public/game.js`, `index.html`, `style.css`.
+- Tested on scratch copies (a test copy and a pretend release) on private ports and in a desktop browser. A release made before this change shows no label: it appears from the next release on.
 
 ### Rocket Base (2026-11-16, in `dev/`, see git log for whether it is released)
 

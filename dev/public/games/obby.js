@@ -1,9 +1,12 @@
 // Obby Tower (client): an obstacle course seen from the side that climbs a tower.
 // The running and jumping is simulated here on the tablet; the server (dev/games/obby.js) owns the flags
 // reached, the stars, the clocks, the rounds and the records. Everyone in the same place sees the others climb.
-// Two towers of 30 hand-made stages in five chapters (garden, castle, ice, clouds, space), and four ways to play
+// Two towers of 30 hand-made stages in five chapters (garden, castle, ice, clouds, space), and five ways to play
 // them, chosen at the entrance: Climb, Race (a chapter, everybody at once, alone against the ghost of your best race),
-// Rising lava (the last one climbing wins) and the Endless tower (made by code from the seed of the day).
+// Rising lava (the last one climbing wins), the Endless tower (made by code from the seed of the day) and Rope Team
+// (two to four climbers tied together by a stretchy rope climb a chapter as one team: a flag counts only when everybody
+// stands on it, whoever falls hangs on the rope and is pulled up or climbs it, and when the whole team is under its
+// last flag everybody goes back to that flag together).
 // The panel at the right edge shows everybody in the room; a tap on somebody or a drag along the height bar looks
 // away from your own player (only on this tablet), a move or a jump comes back.
 (function () {
@@ -391,16 +394,29 @@
   }
   var PA = { x: 0, y: 0 }, PB = { x: 0, y: 0 };
   var OPT = { dj: 1, ledge: 9, coy: COYOTE, haz: 0 };
+  // Rope Team plays the same stages with three differences (o.rope): the stages around the climber are found from where
+  // the climber is (a rope can let somebody hang far under the last flag), nobody is sent back to a flag for falling
+  // (the rope catches, or the whole team goes back together), and whoever swings on the rope keeps the sideways speed.
+  var ROPT = { dj: 1, ledge: 9, coy: COYOTE, haz: 0, rope: 1 };
+  // the stage a height belongs to (stage i reaches from its flag platform up to just under the next one)
+  function stageOf(tw, y, hint) {
+    var i = clamp(hint, 0, tw.n);
+    while (i > 0 && y > tw.stages[i].base) i--;
+    while (i < tw.n && y <= tw.stages[i + 1].base) i++;
+    return i;
+  }
   // One step of `dt` seconds. inp = { ax: -1..1, jump: held }. Sets s.ev to what happened (EV_*).
   function step(tw, s, inp, dt, o) {
     o = o || OPT;
     var ents = tw.ents, T0 = s.T, T1 = T0 + dt, e, i, j, n, list, si, want, acc, py0, best = -1, bestY = 0, wx = 0, wy = 0, a, d, cx, cy, hz = o.haz;
-    var s0 = Math.max(0, s.cp - 1), s1 = Math.min(tw.n, s.cp + 1), grav = G * tw.stages[s.cp].g;
+    var sc = o.rope ? stageOf(tw, s.y - 1, s.cp) : s.cp;
+    var s0 = Math.max(0, sc - 1), s1 = Math.min(tw.n, sc + 1), grav = G * tw.stages[sc].g;
     s.ev = 0; s.T = T1;
     if (s.tpc > 0) s.tpc -= dt;
     if (inp.jump && !s.held) s.buf = BUFFER; else if (s.buf > 0) s.buf -= dt;
     s.held = !!inp.jump;
     want = inp.ax * RUN; acc = (s.on >= 0 ? (ents[s.on].k === 'i' ? ICE : 2800) : 1900) * dt;
+    if (s.sw && s.on < 0) acc = inp.ax ? 700 * dt : 0;        // hanging on a tight rope: swing, do not stop in the air
     if (s.vx < want) s.vx = Math.min(want, s.vx + acc); else if (s.vx > want) s.vx = Math.max(want, s.vx - acc);
     if (inp.ax > 0.2) s.f = 1; else if (inp.ax < -0.2) s.f = -1;
     // wind
@@ -429,7 +445,7 @@
       if (s.vy > MAXFALL) s.vy = MAXFALL;
       py0 = s.y;
       s.x += (s.vx + wx) * dt; s.y += s.vy * dt;
-      if (s.vy < 0 && tw.solid) {
+      if (s.vy < 0 && tw.solid && !s.thru) {      // (whoever is pulled up on a rope comes up through a platform)
         // Hard tower: a head that comes up under a platform stops there (clouds are soft). Near an edge it slips past.
         for (si = s0; si <= s1 && s.vy < 0; si++) {
           list = tw.stages[si].list;
@@ -502,7 +518,7 @@
       }
     }
     // fell below the stage
-    if (s.cp > 0 && s.y > tw.stages[s.cp].base + 170) s.ev |= EV_DIE;
+    if (!o.rope && s.cp > 0 && s.y > tw.stages[s.cp].base + 170) s.ev |= EV_DIE;
     // the next flag (or the one after, should somebody manage to skip one)
     if (!(s.ev & EV_DIE)) {
       for (j = Math.min(tw.n, s.cp + 2); j > s.cp; j--) {
@@ -510,6 +526,191 @@
         if (s.on === e.i || (Math.abs(s.x - e.px) < 44 && s.y <= e.y + 2 && s.y > e.y - 80)) { s.cp = j; s.ev |= EV_FLAG; break; }
       }
     }
+  }
+
+  // ---------- Rope Team: the rope (no drawing in here either: the tests run two tablets against each other) ----------
+  // Every tablet moves only its own climber. What it knows of a neighbour on the rope is where they are, how fast they
+  // move and what they do (RB_*), a moment late. So the rope is soft: past its length it pulls like a spring, a little
+  // further it is a hard stop. Whoever stands is never lifted: the weight of somebody in the air only tugs at their
+  // feet (not while they hold on), and two who both stand simply cannot walk further apart.
+  //   L = length, X = how far it stretches, K / C = spring and damping, MIN = shortest when taken in,
+  //   HOP = rope taken in by one tap while hanging, REEL = by a puller per second, PAYOUT = given back per second while standing,
+  //   TUG / TUGMAX = how hard weight in the air drags somebody who stands, TOW = how fast a pull tows somebody who stands,
+  //   SPACE = longer in the space chapter (half the gravity: every jump is twice as far)
+  var ROPE = { L: 220, X: 60, K: 110, C: 14, MIN: 46, HOP: 48, REEL: 150, PAYOUT: 260, TUG: 0.055, TUGMAX: 130, TOW: 120, SPACE: 1.5, BOUNCE: 150, FIRM: 1.2 };
+  var RB_G = 1, RB_HOLD = 2, RB_PULL = 4, RB_SUP = 8;     // stands · holds on · pulls · hangs on somebody who is held
+  var ROUT = { ax: 0, jump: false }, WR = { x: 0, y: 0 };
+  function ropeLen(tw, flag) { return ROPE.L * (tw.stages[clamp(flag, 0, tw.n - 1)].g < 1 ? ROPE.SPACE : 1); }
+  function newRope() { return { hold: false, pull: false, jheld: false, eat: false, sup: false, taut: 0, bits: 0, ev: 0, firm: 0, x0: 0, L: ROPE.L }; }
+  // my end of the rope to one neighbour: reel = rope I have taken in, ext = extra rope after a bounce pad, apart = no rope for
+  // now, wrap = 1: I hang over the edge of their platform, 2: they hang over the edge of mine (side: which edge, wx / wy: the
+  // corner, up / low: the two parts of the rope)
+  function newLink() { return { reel: 0, ext: 0, apart: false, d: 0, len: ROPE.L, st: 0, wrap: 0, side: 0, wx: 0, wy: 0, up: 0, low: 0 }; }
+  // what a tablet tells the others about its end of a rope: rope taken in (> 0) or extra rope given (< 0)
+  function linkSay(k) { return k.reel > 0.5 ? Math.round(k.reel) : -Math.round(k.ext); }
+  // The rope from somebody who stands on platform `ei` (feet at ax) to somebody under it (feet at bx, by) runs over the
+  // edge of that platform: that is what drags the one above to the edge, and what lets them haul the other one up by
+  // walking away from it. side = the edge it ran over a moment ago (-1 left, 1 right, 0 none). Returns the edge and puts
+  // the corner into WR, or 0 when the rope runs free.
+  function ropeCorner(tw, T, ei, ax, bx, by, side) {
+    var e = tw.ents[ei], xl, xr, top, x;
+    if (!e || !SOLID[e.k] || (e.k === 'f' && e.flag === 0)) return 0;
+    pos(e, T, PA); xl = PA.x; xr = xl + e.w; top = PA.y;
+    if (by - 20 < top + 8) return 0;                    // the other one is not under the top of the platform
+    x = ax + (bx - ax) * 20 / (by - top);               // where a straight rope would meet the top
+    // (a rope that runs over an edge already stays on it while the one above is dragged the last steps past that edge)
+    if ((x <= xl && side >= 0) || (x >= xr && side <= 0)) return 0;
+    if (!side) side = bx < (xl + xr) / 2 ? -1 : 1;
+    WR.x = side < 0 ? xl - 6 : xr + 6; WR.y = top + 2;
+    return side;
+  }
+  // up onto platform ei, standing (not dropped onto it: the weight of somebody below must not pull me through it first)
+  function ropeUp(tw, s, rp, ei, x) {
+    var e = tw.ents[ei];
+    pos(e, s.T, PA);
+    s.x = clamp(x, Math.max(14, PA.x + 10), Math.min(W - 14, PA.x + e.w - 10)); s.y = PA.y; s.vx = 0; s.vy = 0; s.on = ei; s.air = 0; s.coy = 0;
+    if (e.k === 'v' && s.van[ei] === undefined) s.van[ei] = s.T;
+    rp.firm = ROPE.FIRM; rp.ev = 2;           // and a moment to find my feet before any weight can drag me off again
+  }
+  // Before step(): the pull of the rope on my climber `s`. nbs = [{ o: neighbour { x, y, vx, vy, s, e (what they stand on) },
+  // k: my link to them, nr: what they say about their end (see linkSay) }], inp = { ax, jump, hold, pull }. Returns what
+  // step() gets to see: holding on and pulling plant the feet, and a tap on jump while hanging climbs the rope instead
+  // of jumping. rp.ev: 1 = climbed a bit, 2 = got up onto the platform of the one above.
+  function ropeBefore(tw, s, rp, nbs, inp, dt, L) {
+    var air = s.on < 0, ax = inp.ax, jump = !!inp.jump, edge = jump && !rp.jheld, tug = 0, taut = 0, sup = !air, hang = null, thru = false;
+    var i, o, k, ng, dx, dy, d, ux, uy, len, stretch, vr, a, w, side, held, nr, firm;
+    rp.jheld = jump; rp.ev = 0; rp.x0 = s.x; rp.L = L;
+    if (rp.firm > 0) rp.firm -= dt;
+    if (rp.eat && !jump) rp.eat = false;
+    rp.hold = !air && !!(inp.hold || inp.pull); rp.pull = !air && !!inp.pull;
+    firm = rp.hold || rp.firm > 0;
+    for (i = 0; i < nbs.length; i++) {
+      o = nbs[i].o; k = nbs[i].k; nr = nbs[i].nr || 0; ng = (o.s & RB_G) !== 0; held = (o.s & (RB_G | RB_SUP)) !== 0;
+      if (!air && k.reel > 0) k.reel = Math.max(0, k.reel - ROPE.PAYOUT * dt);     // rope taken in runs out again while I stand
+      dx = o.x - s.x; dy = o.y - s.y;
+      // somebody who stands pulls: the rope gets shorter for whoever is in the air, whoever stands is towed along
+      if ((o.s & RB_PULL) && ng && !k.apart) {
+        if (air) k.reel = Math.min(L - ROPE.MIN, k.reel + ROPE.REEL * dt);
+        else if (!firm && Math.abs(dx) > 40) tug += (dx > 0 ? 1 : -1) * ROPE.TOW;
+      }
+      // They bounced: the rope got longer on their side, so it does on mine. (Only a real step up counts: what they say is
+      // a moment old, and two tablets that each took the other's older, longer number would never take the rope in again.)
+      if (-nr > k.ext + 20) k.ext = -nr;
+      len = Math.max(ROPE.MIN, L - Math.max(k.reel, nr)) + k.ext;
+      // which way the rope runs: over the edge of the platform one of us stands on, or free
+      w = 0; side = 0;
+      if (!k.apart) {
+        if (air && ng && o.e >= 0) { side = ropeCorner(tw, s.T, o.e, o.x, s.x, s.y, k.wrap === 1 ? k.side : 0); if (side) w = 1; }
+        else if (!air && !ng) { side = ropeCorner(tw, s.T, s.on, s.x, o.x, o.y, k.wrap === 2 ? k.side : 0); if (side) w = 2; }
+      }
+      k.wrap = w; k.side = side;
+      if (w === 1) {
+        k.wx = WR.x; k.wy = WR.y;
+        dx = WR.x - s.x; dy = WR.y - (s.y - 20);
+        k.low = Math.sqrt(dx * dx + dy * dy) || 0.001; k.up = Math.sqrt((o.x - WR.x) * (o.x - WR.x) + 484);
+        d = k.up + k.low; ux = dx / k.low; uy = dy / k.low;
+      } else if (w === 2) {
+        k.wx = WR.x; k.wy = WR.y;
+        k.up = Math.sqrt((s.x - WR.x) * (s.x - WR.x) + 484);
+        k.low = Math.sqrt((o.x - WR.x) * (o.x - WR.x) + (o.y - 20 - WR.y) * (o.y - 20 - WR.y));
+        d = k.up + k.low; ux = side; uy = 0;
+      } else {
+        d = Math.sqrt(dx * dx + dy * dy) || 0.001; ux = dx / d; uy = dy / d;
+      }
+      k.d = d; k.len = len;
+      if (k.ext > 0 && d < len - 10) k.ext = Math.max(0, k.ext - 90 * dt);       // the extra rope is taken in again as we get together
+      // Apart (one of us went through a door, or the team was just tied again): no rope until we are really together
+      // again. Half a rope, not a whole one: the two ends of a door can be closer than a rope is long, and the rope
+      // must not hold the first one back straight through the wall while the second one still walks to the door.
+      if (k.apart) { if (d < len * 0.5) k.apart = false; else { k.st = 0; continue; } }
+      stretch = d - len; k.st = stretch;
+      if (air && k.reel > 0) thru = true;
+      if (air && stretch > -14 && held && (w === 1 || o.y < s.y - 24) && (!hang || o.y < hang.o.y)) hang = nbs[i];
+      if (stretch <= 0) continue;
+      if (stretch > taut) taut = stretch;
+      if (air) {
+        // > 0: the rope gets shorter by itself (we come closer)
+        vr = w === 1 ? s.vx * ux + s.vy * uy - (o.vx || 0) * (o.x > WR.x ? 1 : -1) : (s.vx - (o.vx || 0)) * ux + (s.vy - (o.vy || 0)) * uy;
+        a = ROPE.K * Math.min(stretch, ROPE.X) - ROPE.C * clamp(vr, -700, 700);
+        if (a > 0) { s.vx += a * ux * dt; s.vy += a * uy * dt; }
+        if (held && (w === 1 || o.y < s.y - 24)) sup = true;
+      } else if (w === 2) {
+        // their weight hangs over my edge: it drags me there, unless I hold on (or walk the other way: that lifts them)
+        if (!firm) tug += ux * Math.min(ROPE.TUGMAX, ROPE.K * Math.min(stretch, ROPE.X) * ROPE.TUG);
+      } else if (!ng) {
+        if (!firm) tug += clamp(ROPE.K * Math.min(stretch, ROPE.X) * ux * ROPE.TUG, -ROPE.TUGMAX, ROPE.TUGMAX);
+      } else if (ax && (ax > 0) !== (dx > 0)) {
+        ax *= Math.max(0, 1 - stretch / ROPE.X);          // both stand and I walk away: the rope gives a little, then stops me
+      }
+    }
+    if (air && hang) {
+      k = hang.k;
+      if (edge && !rp.eat) {           // a tap: up the rope (one arm's length at a time: not while the last one still pulls me up)
+        rp.eat = true;
+        if (k.st < 34 && k.reel < L - ROPE.MIN) {
+          k.reel = Math.min(L - ROPE.MIN, k.reel + ROPE.HOP);
+          if (s.vy > -170) s.vy = -170;
+          rp.ev = 1; thru = true;
+        }
+      }
+      if (k.wrap === 1) {
+        // held right under the edge: up onto the platform
+        if (k.low < 36 && k.st > -8) { ropeUp(tw, s, rp, hang.o.e, k.wx - k.side * 34); k.wrap = 0; thru = false; air = false; }
+      } else if ((hang.o.s & RB_G) && hang.o.e >= 0 && k.len <= ROPE.MIN + 1 && k.d < ROPE.MIN + 44) {
+        // at the end of the rope right under somebody who stands: up beside them
+        ropeUp(tw, s, rp, hang.o.e, hang.o.x); thru = false; air = false;
+      }
+    }
+    if (rp.eat) jump = false;
+    if (rp.ev === 2) { ax = 0; jump = false; sup = true; taut = 0; }
+    else if (!air) {
+      if (rp.hold) { ax = 0; jump = false; }
+      else if (tug) s.x += clamp(tug, -ROPE.TUGMAX, ROPE.TUGMAX) * dt;
+    }
+    s.sw = air && taut > 0;
+    if (s.sw) s.vx -= s.vx * Math.min(1, 1.3 * dt);       // a swing dies down
+    s.thru = thru;
+    rp.sup = sup; rp.taut = taut;
+    rp.bits = (air ? 0 : RB_G) | (rp.hold ? RB_HOLD : 0) | (rp.pull ? RB_PULL : 0) | (air && sup ? RB_SUP : 0);
+    ROUT.ax = ax; ROUT.jump = jump;
+    return ROUT;
+  }
+  // After step(): the hard stop at the end of the stretch. In the air I come all the way back when the other one is held
+  // (stands, or hangs on somebody who is), else half of it (their tablet does the other half). Standing I am never pulled:
+  // I only cannot get further away from somebody who stands too. Through a door: the rope lets go.
+  function ropeAfter(s, rp, nbs) {
+    var air = s.on < 0, i, o, k, dx, dy, d, ux, uy, ex, sh, vr;
+    if (s.ev & EV_TP) { for (i = 0; i < nbs.length; i++) { nbs[i].k.apart = true; nbs[i].k.wrap = 0; } return; }
+    // off a bounce pad: the rope gives extra length (it is taken in again when we are together)
+    if (s.ev & EV_BOUNCE) for (i = 0; i < nbs.length; i++) nbs[i].k.ext = Math.max(nbs[i].k.ext, ROPE.BOUNCE * rp.L / ROPE.L);
+    for (i = 0; i < nbs.length; i++) {
+      o = nbs[i].o; k = nbs[i].k;
+      if (k.apart || k.wrap === 2) continue;             // (they hang over my edge: their tablet stops them)
+      if (k.wrap === 1) {
+        if (!air) continue;
+        dx = k.wx - s.x; dy = k.wy - (s.y - 20); d = Math.sqrt(dx * dx + dy * dy) || 0.001;
+        ex = Math.min(d, k.up + d - (k.len + ROPE.X));
+        if (ex <= 0) continue;
+        ux = dx / d; uy = dy / d;
+        s.x += ux * ex; s.y += uy * ex;
+        vr = s.vx * ux + s.vy * uy;
+        if (vr < 0) { s.vx -= vr * ux; s.vy -= vr * uy; }
+        continue;
+      }
+      dx = o.x - s.x; dy = o.y - s.y; d = Math.sqrt(dx * dx + dy * dy) || 0.001;
+      ex = d - (k.len + ROPE.X);
+      if (ex <= 0) continue;
+      ux = dx / d; uy = dy / d;
+      if (air) {
+        sh = (o.s & (RB_G | RB_SUP)) ? 1 : 0.5;
+        s.x += ux * ex * sh; s.y += uy * ex * sh;
+        vr = (s.vx - (o.vx || 0)) * ux + (s.vy - (o.vy || 0)) * uy;
+        if (vr < 0) { s.vx -= vr * ux * sh; s.vy -= vr * uy * sh; }
+      } else if ((o.s & RB_G) && Math.abs(dx) > Math.abs(o.x - rp.x0)) {
+        s.x = rp.x0;        // both stand at the end of the rope: no further apart (a platform that would carry me off slides away under me)
+      }
+    }
+    if (s.x < 14) s.x = 14; else if (s.x > W - 14) s.x = W - 14;
   }
 
   // ---------- small drawing helpers ----------
@@ -861,9 +1062,10 @@
     climb: { en: 'Climb', zh: '爬塔', py: 'pá tǎ', ms: 'Panjat menara' },
     race: { en: 'Race', zh: '比赛', py: 'bǐsài', ms: 'Perlumbaan' },
     lava: { en: 'Rising lava', zh: '岩浆上升', py: 'yánjiāng shàngshēng', ms: 'Lava naik' },
-    endless: { en: 'Endless tower', zh: '无尽塔', py: 'wújìn tǎ', ms: 'Menara tanpa henti' }
+    endless: { en: 'Endless tower', zh: '无尽塔', py: 'wújìn tǎ', ms: 'Menara tanpa henti' },
+    rope: { en: 'Rope Team', zh: '绳子小队', py: 'shéngzi xiǎoduì', ms: 'Pasukan Tali' }
   };
-  var MODE_ICON = { climb: '🗼', race: '🏁', lava: '🌋', endless: '⏫', tower: '🗼' };
+  var MODE_ICON = { climb: '🗼', race: '🏁', lava: '🌋', endless: '⏫', tower: '🗼', rope: '🤝' };
   var CHAPS = [
     { icon: '🌱', en: 'Garden', zh: '花园', py: 'huāyuán', ms: 'Taman' },
     { icon: '🏰', en: 'Castle', zh: '城堡', py: 'chéngbǎo', ms: 'Istana' },
@@ -882,8 +1084,11 @@
   var gap = 134;                   // grass shown under the ground line (world units): the touch buttons must not cover the player there
   var raf = 0, lastT = 0, tOff = 0;
   var mode = null;                 // null = closed, 'lobby', 'run', 'done'
-  var tab = 'climb';               // the way to play shown at the entrance: 'climb', 'race', 'lava', 'endless'
-  var sel = { rt: 'easy', rc: 0, lt: 'easy' };    // what is picked for a race (tower, chapter) and for the lava (tower)
+  var tab = 'climb';               // the way to play shown at the entrance: 'climb', 'race', 'lava', 'endless', 'rope'
+  var sel = { rt: 'easy', rc: 0, lt: 'easy', pt: 'easy', pc: 0 };    // what is picked for a race (tower, chapter), for the lava (tower) and for a rope team (tower, chapter)
+  var ROPE_COL = '#E9B45C', ROPE_HOT = '#FF6A3D';     // the rope, and the rope when it is tight
+  var rkeys = { hold: false, pull: false, hp: null, pp: null };     // the two rope buttons: pressed, and by which finger
+  var NBS = [];                    // my neighbours on the rope this frame (see ropeNbs)
   var info = null;                 // what the server told us: { towers, me, lb, who, pt, day, caps }
   var tw = null, st = null, run = null;
   var look = null;                 // looking away from my own player: { id: whom (0 = just scrolling), y, last, auto }
@@ -992,6 +1197,13 @@
     '.obby-key.j svg{transform:rotate(90deg)}',
     '.obby-key.on{background:#FFD66B;transform:scale(.93)}',
     '.obby-key.j.on{background:#FFB020}',
+    // Rope Team: hold on (feet planted, nobody can drag me off) and pull (haul in whoever hangs on my rope)
+    '.obby-rk{position:absolute;bottom:20px;width:84px;height:84px;border-radius:26px;border:4px solid #1B2A49;background:rgba(255,255,255,.8);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:0;font-size:34px;line-height:1.05;pointer-events:auto;touch-action:none;user-select:none;-webkit-user-select:none;box-shadow:0 5px 0 rgba(27,42,73,.28)}',
+    '.obby-rk i{font-style:normal;font-size:13.5px;font-weight:700}',
+    '.obby-rk.h{right:142px}',
+    '.obby-rk.p{right:236px}',
+    '.obby-rk.on{background:#FFD66B;transform:translateY(4px);box-shadow:0 1px 0 rgba(27,42,73,.28)}',
+    '.obby-rk[hidden]{display:none}',
     // the panel at the right edge: everybody in the room (tap = look at them) and the height bar (drag = look up and down)
     '.obby-bar{position:absolute;right:0;top:74px;bottom:138px;width:54px;touch-action:none;cursor:ns-resize}',
     '.obby-who{position:absolute;right:56px;top:72px;bottom:142px;display:flex;flex-direction:column;flex-wrap:wrap-reverse;align-content:flex-start;gap:4px;pointer-events:none}',
@@ -1032,6 +1244,7 @@
       '.obby-card{padding:8px 11px;gap:5px;border-radius:22px}.obby-ico{width:34px;height:46px}.obby-emo{width:44px;height:44px;font-size:26px;line-height:38px;border-radius:13px}.obby-nm{font-size:14px}.obby-nm b{font-size:19px}' +
       '.obby-row{font-size:14.5px}.obby-row b{font-size:17px}.obby-lb{font-size:14.5px;padding:3px 9px}.obby-lb li{line-height:1.35}.obby-rew{font-size:13.5px}.obby-chap{height:50px;font-size:15.5px}.obby-chap i{font-size:12px}.obby-seg .btn{height:48px;font-size:16px}.obby-state{font-size:14.5px;min-height:36px}' +
       '.obby-btns .btn{font-size:17px;height:50px}.obby-key{width:78px;height:78px}.obby-key.r{left:102px}.obby-key.j{width:100px;height:100px}.obby-who{bottom:130px}.obby-pc{width:104px;font-size:14px}' +
+      '.obby-rk{width:74px;height:74px;font-size:29px;border-radius:22px}.obby-rk i{font-size:12.5px}.obby-rk.h{right:126px}.obby-rk.p{right:208px}' +
       '.obby-dt{font-size:22px}.obby-dtime{font-size:28px}.obby-ds{font-size:19px}.obby-dx{font-size:15.5px}.obby-dl{font-size:15.5px}.obby-backme{height:56px;font-size:20px}.obby-lookn{font-size:18px}}'
   ].join('\n');
 
@@ -1044,20 +1257,23 @@
       '<div class="obby-top"><button class="btn obby-back" type="button" data-quiet>Back to town</button>' +
       '<button class="btn obby-menu" type="button" hidden>🗼 Towers</button>' +
       '<div class="obby-tabs"><button class="btn obby-tab" type="button" data-tab="climb">🗼 Climb</button><button class="btn obby-tab" type="button" data-tab="race">🏁 Race</button>' +
-      '<button class="btn obby-tab" type="button" data-tab="lava">🌋 Lava</button><button class="btn obby-tab" type="button" data-tab="endless">⏫ Endless</button></div>' +
+      '<button class="btn obby-tab" type="button" data-tab="lava">🌋 Lava</button><button class="btn obby-tab" type="button" data-tab="endless">⏫ Endless</button>' +
+      '<button class="btn obby-tab" type="button" data-tab="rope">🤝 Rope</button></div>' +
       '<div class="obby-ttl">' + api.three(NAME) + '</div>' +
       '<div class="obby-pill obby-pf" hidden></div><div class="obby-pill dark obby-pt" hidden></div><div class="obby-pill obby-px" hidden></div></div>' +
       '<div class="obby-lobby"></div>' +
       '<div class="obby-bar" hidden></div><div class="obby-who" hidden></div>' +
       '<div class="obby-look" hidden><div class="obby-lookn"></div><button class="btn primary obby-backme" type="button">↩ Back to me</button></div>' +
-      '<div class="obby-keys" hidden><div class="obby-key l">' + ARROW + '</div><div class="obby-key r">' + ARROW + '</div><div class="obby-key j">' + ARROW + '</div></div>' +
+      '<div class="obby-keys" hidden><div class="obby-key l">' + ARROW + '</div><div class="obby-key r">' + ARROW + '</div><div class="obby-key j">' + ARROW + '</div>' +
+      '<div class="obby-rk p" data-rk="pull" hidden>💪<i>Pull</i></div><div class="obby-rk h" data-rk="hold" hidden>✊<i>Hold</i></div></div>' +
       '<div class="obby-done" hidden></div>';
     document.body.appendChild(root);
     cv = root.querySelector('.obby-cv'); c = cv.getContext('2d');
     function q(s) { return root.querySelector(s); }
     els = { back: q('.obby-back'), menu: q('.obby-menu'), tabs: q('.obby-tabs'), ttl: q('.obby-ttl'), pf: q('.obby-pf'), pt: q('.obby-pt'), px: q('.obby-px'),
       lobby: q('.obby-lobby'), keys: q('.obby-keys'), kl: q('.obby-key.l'), kr: q('.obby-key.r'), kj: q('.obby-key.j'), done: q('.obby-done'),
-      bar: q('.obby-bar'), who: q('.obby-who'), look: q('.obby-look'), lookn: q('.obby-lookn'), backme: q('.obby-backme') };
+      bar: q('.obby-bar'), who: q('.obby-who'), look: q('.obby-look'), lookn: q('.obby-lookn'), backme: q('.obby-backme'), rh: q('.obby-rk.h'), rp: q('.obby-rk.p') };
+    [els.rh, els.rp].forEach(function (el) { el.addEventListener('pointerdown', rkDown); el.addEventListener('pointerup', rkUp); el.addEventListener('pointercancel', rkUp); el.addEventListener('lostpointercapture', rkUp); });
     els.back.onclick = close;
     els.menu.onclick = function () { els.menu.blur(); toLobby(); };
     els.tabs.addEventListener('click', onTabClick);
@@ -1109,6 +1325,7 @@
     els.tabs.hidden = !lobby;
     els.menu.hidden = lobby;
     els.keys.hidden = lobby || spec;
+    els.rh.hidden = els.rp.hidden = !(run && run.mode === 'rope' && !spec);
     els.pf.hidden = lobby;
     els.pt.hidden = true;
     els.px.hidden = lobby;
@@ -1135,6 +1352,7 @@
     else if (tab === 'race') html = raceHtml();
     else if (tab === 'lava') html = lavaHtml();
     else if (tab === 'endless') html = endlessHtml();
+    else if (tab === 'rope') html = ropeHtml();
     else html = cardHtml('easy') + cardHtml('hard');
     list = els.tabs.children;
     for (i = 0; i < list.length; i++) list[i].className = 'btn obby-tab' + (list[i].getAttribute('data-tab') === tab ? ' on' : '');
@@ -1203,16 +1421,43 @@
       return '<div class="obby-state">' + out + '</div>';
     }
     for (i = 0; i < P.ready.length; i++) out += '<span>✔ ' + api.esc(P.ready[i]) + '</span>';
-    if (P.state === 'gather') out += '<b class="obby-cd" data-at="' + P.at + '"></b>';
+    if (P.state === 'gather' && md === 'rope' && !P.at) out += '<b>⏳ 👤+👤</b>';        // a rope team waits for its second climber
+    else if (P.state === 'gather') out += '<b class="obby-cd" data-at="' + P.at + '"></b>';
     else out = '<span>🙋 ' + MODE_ICON[md] + ' 3 · 2 · 1 …</span>';
     return '<div class="obby-state">' + out + '</div>';
   }
-  function readyBtns(md, P) {
-    var ready = amReady(P), ico = MODE_ICON[md];
+  // off = this way to play cannot be started right now (a rope team alone at the tower)
+  function readyBtns(md, P, off) {
+    var ready = amReady(P), ico = MODE_ICON[md], dis = off ? ' disabled' : '';
     if (P.state === 'run') return '<button class="btn" type="button" data-a="watch" data-mode="' + md + '">👀 Watch</button>' +
-      (ready ? '<button class="btn" type="button" data-a="unready" data-mode="' + md + '">✖ Not ready</button>' : '<button class="btn primary" type="button" data-a="ready" data-mode="' + md + '">' + ico + ' Next round</button>');
+      (ready ? '<button class="btn" type="button" data-a="unready" data-mode="' + md + '">✖ Not ready</button>' : '<button class="btn primary" type="button" data-a="ready" data-mode="' + md + '"' + dis + '>' + ico + ' Next round</button>');
     if (ready) return '<button class="btn" type="button" data-a="unready" data-mode="' + md + '">✖ Not ready</button>';
-    return '<button class="btn primary" type="button" data-a="ready" data-mode="' + md + '">' + ico + (P.state === 'gather' ? ' Join!' : ' Ready!') + '</button>';
+    return '<button class="btn primary" type="button" data-a="ready" data-mode="' + md + '"' + dis + '>' + ico + (P.state === 'gather' ? ' Join!' : ' Ready!') + '</button>';
+  }
+  // how many players are at the tower right now (a rope team needs two)
+  function atTower() { var pl = api.players(), id, n = 0; for (id in pl) if (pl[id] && pl[id].room === 'obby') n++; return n; }
+  // Rope Team: two to four climbers tied together climb one chapter. Alone the card is grey: it takes two.
+  function ropeHtml() {
+    var P = partyOf('rope'), lock = P.state === 'gather', tower = lock ? P.tower : sel.pt, me = info.me || {}, d = me[tower] || {}, r = me.rope || { left: 0 }, lb = info.lb || {}, caps = info.caps || {};
+    var cfg = info.towers[tower] || {}, nc = Math.ceil((cfg.stages || 30) / CHAP), pay = cfg.rope || [1, 3], need = caps.ropeMin || 2, alone = atTower() < need;
+    var open = Math.max(d.top || 0, (lb.ropeTop || {})[tower] || 0), k, chaps = '', ch, best, list;
+    if (!lock && open < sel.pc * CHAP) sel.pc = 0;
+    ch = lock ? P.ch : sel.pc;
+    list = lb.rope && lb.rope[tower] ? lb.rope[tower] : [];
+    for (k = 0; k < nc; k++) {
+      best = list[k] && list[k][0] ? list[k][0].ms : 0;
+      chaps += '<button class="btn obby-chap' + (k === ch ? ' on' : '') + '" type="button" data-a="pick" data-k="pc" data-v="' + k + '"' + (!lock && open >= k * CHAP ? '' : ' disabled') + '><span>' + CHAPS[k % CHAPS.length].icon + ' ' + (k + 1) + '</span><i>' +
+        (open < k * CHAP ? '🔒' : best ? '🤝 ' + fmtS(best) : '▶') + '</i></button>';
+    }
+    return '<div class="obby-card"' + (alone ? ' style="filter:grayscale(.9)"' : '') + '><div class="obby-ch"><div class="obby-emo">🤝</div><div class="obby-nm">' + api.three(MODE_NAME.rope) + '</div></div>' +
+      segHtml('pt', tower, lock) + '<div class="obby-chaps">' + chaps + '</div>' +
+      '<div class="obby-sub">' + CHAPS[ch % CHAPS.length].icon + ' ' + api.three(CHAPS[ch % CHAPS.length]) + '</div>' +
+      '<div class="obby-rew"><span>🚩 👤👤 = +' + pay[0] + ' ⭐</span><span>🏆 +' + pay[1] + ' ⭐</span><span>' + (r.left > 0 ? r.left + ' left today' : '✔ today') + '</span></div>' +
+      (alone ? '<div class="obby-state"><span>👤 + 👤 = 🤝</span><b>' + atTower() + ' / ' + need + '</b></div>' : stateHtml('rope', P)) +
+      '<div class="obby-btns">' + readyBtns('rope', P, alone) + '</div></div>' +
+      '<div class="obby-card"><div class="obby-row"><span>🤝 🚩 <b>' + (r.flags || 0) + '</b></span><span>🏆 <b>' + (r.wins || 0) + '</b></span></div>' +
+      '<div class="obby-row"><span>✊ = ⚓</span><span>💪 = ⬆👤</span><span>👤⤵ + 👆👆 = ⬆</span></div>' +
+      boardHtml('⏱ 🤝 ' + api.esc(TOWER_NAME[tower].en) + ' ' + CHAPS[ch % CHAPS.length].icon + (ch + 1), list[ch], function (e) { return fmt(e.ms); }, 3) + whoHtml('rope') + '</div>';
   }
   function raceHtml() {
     var P = partyOf('race'), lock = P.state === 'gather', tower = lock ? P.tower : sel.rt, me = info.me || {}, d = me[tower] || {}, r = me.race || { left: 0, best: {} }, lb = info.lb || {};
@@ -1276,7 +1521,7 @@
     renderLobby();
   }
   function sendReady(md) {
-    api.send({ t: 'obby.ready', mode: md, tower: md === 'race' ? sel.rt : sel.lt, ch: sel.rc, on: true });
+    api.send({ t: 'obby.ready', mode: md, tower: md === 'race' ? sel.rt : md === 'rope' ? sel.pt : sel.lt, ch: md === 'rope' ? sel.pc : sel.rc, on: true });
   }
   function onLobbyClick(e) {
     var el = e.target, a, md;
@@ -1286,7 +1531,7 @@
     a = el.getAttribute('data-a'); md = el.getAttribute('data-mode');
     if (a === 'go') api.send({ t: 'obby.start', tower: el.getAttribute('data-tower'), from: parseInt(el.getAttribute('data-from'), 10) || 0 });
     else if (a === 'pick') {
-      if (el.getAttribute('data-k') === 'rc') sel.rc = parseInt(el.getAttribute('data-v'), 10) || 0;
+      if (el.getAttribute('data-k') === 'rc' || el.getAttribute('data-k') === 'pc') sel[el.getAttribute('data-k')] = parseInt(el.getAttribute('data-v'), 10) || 0;
       else sel[el.getAttribute('data-k')] = el.getAttribute('data-v') === 'hard' ? 'hard' : 'easy';
       renderLobby();
     }
@@ -1304,7 +1549,11 @@
     if (a === 'again' && md === 'tower') api.send({ t: 'obby.start', tower: run.tower, from: 0 });
     else if (a === 'again' && md === 'endless') api.send({ t: 'obby.start', mode: 'endless' });
     else if (a === 'again') {          // ready for the next round of the same race / lava
-      if (md === 'race') { sel.rt = run.tower === 'hard' ? 'hard' : 'easy'; sel.rc = Math.floor(run.from / CHAP); } else sel.lt = run.tower === 'hard' ? 'hard' : 'easy';
+      if (md === 'race') { sel.rt = run.tower === 'hard' ? 'hard' : 'easy'; sel.rc = Math.floor(run.from / CHAP); }
+      else if (md === 'rope') {      // the same chapter again, or the next one when the team got to the top of this one
+        sel.pt = run.tower === 'hard' ? 'hard' : 'easy';
+        sel.pc = Math.min(Math.floor(run.from / CHAP) + (run.res && run.res.won ? 1 : 0), Math.ceil(tw.n / CHAP) - 1);
+      } else sel.lt = run.tower === 'hard' ? 'hard' : 'easy';
       tab = md;
       toLobby();
       sendReady(md);
@@ -1351,12 +1600,18 @@
       y = o ? o.y - vh * 0.57 : look.id === -1 && run.lava ? Math.min(lavaLevel(), 0) - vh * 0.7 : look.id ? cam.y : look.y;
       return clamp(y, tw.top - vh * 0.75, gap - vh);
     }
+    if (run.mode === 'rope' && NBS.length) {
+      // roped: the view leans toward my neighbours on the rope, so whoever hangs under me (or holds me) is in the picture
+      for (y = 0, o = 0; o < NBS.length; o++) y += NBS[o].o.y;
+      return Math.min(st.y - vh * 0.57 + clamp((y / NBS.length - st.y) * 0.4, -70, 50), gap - vh);
+    }
     return Math.min(st.y - vh * 0.57, gap - vh);
   }
   // ---------- looking at the others (only on this tablet: the server and the other players do not notice) ----------
   // While I look away my own player waits where it is: it is not moved and nothing on the screen can hurt it.
   function startLook(id, y, auto) {
     if (!run || !st || mode === 'lobby') return;
+    if (run.mode === 'rope' && !run.spec) return;      // tied to the others: my climber cannot wait while I look around (the view takes in the team anyway)
     if (!look) {
       look = { id: 0, y: cam.y, last: now(), auto: false, T0: towerTime(), on: st.on, off: 0 };
       if (st.on >= 0) { pos(tw.ents[st.on], st.T, PB); look.off = st.x - PB.x; }
@@ -1438,12 +1693,12 @@
       w = by[id]; o = rk[id];
       can = !!others[id];
       if (o && o[4]) txt = run.mode === 'lava' ? '✖ ' + o[5] + ' m' : '✖';
-      else if (w) txt = (w[1] === myPlace() ? '' : MODE_ICON[w[1]] || '🗼') + (w[3] ? '🏆' : '🚩' + (run.mode === 'race' && w[1] === 'race' ? w[2] - run.from : w[2]));
+      else if (w) txt = (w[1] === myPlace() ? '' : MODE_ICON[w[1]] || '🗼') + (w[3] ? '🏆' : '🚩' + ((run.mode === 'race' && w[1] === 'race') || (run.mode === 'rope' && w[1] === 'rope') ? w[2] - run.from : w[2]));
       else txt = '🚪';
       list.push({ id: id, p: p, txt: txt, can: can, f: w ? w[2] : -1 });
     }
     list.sort(function (a, b) { return (b.can ? 1 : 0) - (a.can ? 1 : 0) || b.f - a.f || (a.p.name < b.p.name ? -1 : 1); });
-    txt = run.spec ? (run.watch ? '👀' : '✖') : '🚩' + (run.mode === 'race' ? Math.min(st.cp, run.end) - run.from : st.cp);
+    txt = run.spec ? (run.watch ? '👀' : '✖') : '🚩' + (run.mode === 'race' ? Math.min(st.cp, run.end) - run.from : run.mode === 'rope' ? run.team.flag - run.from : st.cp);
     html = '<button class="obby-pc me' + (look || run.spec ? '' : ' on') + '" type="button" data-id="me"' + (run.spec ? ' disabled' : '') + '><i style="background:' + api.esc(me.color || '#FF7A45') + '"></i><span><b>' + api.esc(me.name || '') + '</b><em>' + txt + '</em></span></button>';
     for (i = 0; i < list.length && i < 11; i++) {
       o = list[i]; cls = 'obby-pc' + (o.can ? '' : ' off') + (at && String(at.id) === String(o.id) ? ' on' : '');
@@ -1462,7 +1717,7 @@
   }
 
   function beginRun(m) {
-    var md = m.mode === 'race' || m.mode === 'lava' || m.mode === 'endless' ? m.mode : 'tower', id = m.tower === 'hard' ? 'hard' : 'easy';
+    var md = m.mode === 'race' || m.mode === 'lava' || m.mode === 'endless' || m.mode === 'rope' ? m.mode : 'tower', id = m.tower === 'hard' ? 'hard' : 'easy';
     if (m.gone) {              // the next round began without us: back to the entrance
       if (run && run.mode === md && (run.res || run.spec)) { tab = md; toLobby(true); }
       return;
@@ -1480,24 +1735,110 @@
       hearts: HEARTS, rk: [], ghost: null, rec: [], fin: null, outRes: null, res: null, over: null, grace: 0, freeze: 0, hide: false, count: '', maxH: 0 };
     if (run.at) run.goAt = run.at - EPOCH - tOff;
     if (m.ghost && m.ghost.ms > 0) run.ghost = { ms: m.ghost.ms, s: typeof m.ghost.s === 'string' ? m.ghost.s : '' };
+    if (md === 'rope') {
+      // the team's flag is the server's; the rope to my neighbours is worked out here (see ropeBefore)
+      run.team = { flag: st.cp, from: st.cp, end: run.end, falls: 0, seq: (m.team && m.team.seq) || 0, pay: [1, 3] };
+      run.rp = newRope(); run.links = {}; run.chain = []; run.evx = 0; run.evy = 0; run.px = st.x; run.py = st.y;
+      setTeam(m.team);
+      run.from = run.team.from;
+    }
     others = {}; parts = []; pops = []; bounced = {}; squash = 0; deaths = 0; look = null;
     setMode('run');
     if (run.watch) goSpec();
     cam.y = camTarget();
     api.sfx('open');
   }
+  // ---------- Rope Team on this tablet ----------
+  function setTeam(tm) {
+    var T = run && run.team;
+    if (!T || !tm) return;
+    T.flag = clamp(parseInt(tm.flag, 10) || 0, 0, tw.n); T.falls = tm.falls || 0;
+    if (typeof tm.from === 'number') T.from = tm.from;
+    if (typeof tm.end === 'number') T.end = tm.end;
+    if (Array.isArray(tm.pay)) T.pay = tm.pay;
+    run.acked = T.flag;
+    // the team went back to its flag while this tablet was not listening
+    if (tm.seq > T.seq) { T.seq = tm.seq; if (!run.spec && st) ropeHome(true); }
+  }
+  // who is tied, in the order of the rope (from the round as the server sends it)
+  function ropeChain() {
+    var rk = run.rk || [], i, list = [];
+    for (i = 0; i < rk.length; i++) if (!rk[i][4]) list.push(rk[i][0]);
+    run.chain = list;
+  }
+  function ropeIndex() { var ch = run.chain, mine = String(api.myId()), i; for (i = 0; i < ch.length; i++) if (String(ch[i]) === mine) return i; return -1; }
+  // side by side on a flag, in the order of the rope
+  function ropeSlot() {
+    var F = tw.ents[tw.stages[st.cp].fi], i = ropeIndex(), n = run.chain.length;
+    if (i < 0) return;
+    st.x = clamp(st.x + (i - (n - 1) / 2) * 34, F.x + 12, F.x + F.w - 12);
+  }
+  var NBP = [{ o: null, k: null, nr: 0, side: -1, id: 0 }, { o: null, k: null, nr: 0, side: 1, id: 0 }];
+  // my neighbours on the rope (the one tied before me and the one after me), as far as this tablet has heard of them
+  function ropeNbs() {
+    var ch = run.chain, mi = ropeIndex(), side, id, o, k, e, L = ropeLen(tw, run.team.flag), dx, dy, keep = {};
+    NBS.length = 0;
+    if (mi < 0) return NBS;
+    for (side = -1; side <= 1; side += 2) {
+      id = ch[mi + side];
+      if (id === undefined) continue;
+      keep[id] = 1;
+      o = others[id];
+      if (!o || o.s === undefined) continue;
+      k = run.links[id];
+      if (!k) {          // a new neighbour (somebody between us left the rope): tied when we are close enough
+        k = run.links[id] = newLink(); dx = o.x - st.x; dy = o.y - st.y;
+        k.apart = dx * dx + dy * dy > (L + ROPE.X) * (L + ROPE.X);
+      }
+      if (o.tp) { o.tp = false; k.apart = true; k.wrap = 0; }      // they went through a door (or back to the flag)
+      e = NBP[NBS.length]; e.o = o; e.k = k; e.nr = side < 0 ? o.r1 || 0 : o.r0 || 0; e.side = side; e.id = id;
+      NBS.push(e);
+    }
+    for (id in run.links) if (!keep[id]) delete run.links[id];
+    return NBS;
+  }
+  function ropeSay(side) { var i; for (i = 0; i < NBS.length; i++) if (NBS[i].side === side) return linkSay(NBS[i].k); return 0; }
+  // true when no rope holds me right now: nobody to be tied to, or every rope is let go (a door between us)
+  function ropeFree() { var i; for (i = 0; i < NBS.length; i++) if (!NBS[i].k.apart) return false; return true; }
+  // back to the team's flag: the whole team (the server said so) or only me (I fell while no rope held me)
+  function ropeHome(team) {
+    var id;
+    puff(st.x, st.y - 20, 12, '#FFFFFF', 150, 0);
+    st.cp = clamp(run.team.flag, 0, tw.n - 1); spawn(tw, st); ropeSlot();
+    run.rp = newRope();
+    for (id in run.links) { run.links[id].reel = 0; run.links[id].ext = 0; run.links[id].wrap = 0; run.links[id].apart = !team; }
+    run.grace = now() + 900; run.freeze = now() + 450; run.evx = run.evy = 0; run.px = st.x; run.py = st.y;
+    flash = 0.5; squash = 0;
+    beep(520, 180, 0.3, 0.1, 'triangle');
+    pop(team ? '↩ 🚩 🤝' : '↩ 🚩', '#fff', 0, 2);
+    cam.y += (camTarget() - cam.y) * 0.6;
+  }
+  // how many of the team stand on the next flag right now, and how high the lowest one on the rope is
+  var TEAM = { on: 0, n: 0, low: 0 };
+  function teamNow() {
+    var ch = run.chain, F = tw.ents[tw.stages[Math.min(run.team.flag + 1, tw.n)].fi], mine = String(api.myId()), i, o, on = 0, n = 0, low = 1e9, h;
+    for (i = 0; i < ch.length; i++) {
+      if (String(ch[i]) === mine) { if (run.spec) continue; n++; h = -st.y; if (st.on === F.i) on++; }
+      else { o = others[ch[i]]; n++; if (!o) continue; h = -o.y; if ((o.s & RB_G) && o.e === F.i) on++; }
+      if (h < low) low = h;
+    }
+    TEAM.on = on; TEAM.n = n; TEAM.low = low > 1e8 ? -tw.stages[run.team.flag].base : low;
+    return TEAM;
+  }
+
   function resync() {   // the server does not know our climb any more
     if (!run || now() - run.lastSync < 2000) return;
     run.lastSync = now();
     if (run.mode === 'tower') api.send({ t: 'obby.start', tower: run.tower, from: run.acked, keep: 1 });
     else if (!run.res && !run.over) { api.toast('The round is over.'); toLobby(true); }
   }
-  var ZERO = { ax: 0, jump: false };
+  var ZERO = { ax: 0, jump: false, hold: false, pull: false };
   function readInput() {
     var k = api.keys(), ax = (k.arrowright || k.d ? 1 : 0) - (k.arrowleft || k.a ? 1 : 0), jump = !!(k[' '] || k.spacebar || k.arrowup || k.w);
     if (touch.id !== null) ax = touch.dir;
     if (touch.n > 0) jump = true;
-    return { ax: ax, jump: jump };
+    // the rope buttons (on the laptop: S or arrow down holds on, E or shift pulls)
+    return { ax: ax, jump: jump, hold: rkeys.hold || !!(k.s || k.arrowdown), pull: rkeys.pull || !!(k.e || k.shift) };
   }
   function pop(txt, bg, up, max) { if (st) pops.push({ x: st.x, y: st.y - 58 - (up || 0), txt: txt, life: 0, max: max || 1.5, bg: bg || '#FFD66B' }); }
   function puff(x, y, n, col, spd, kind) {
@@ -1527,6 +1868,16 @@
   }
   function onEvents(ev, x0, y0) {
     var F, e, rest;
+    if ((ev & EV_DIE) && run.mode === 'rope') {
+      // Roped, nothing sends me back to a flag: what hurts knocks me off my feet, and then the rope holds or it does not.
+      puff(x0, y0 - 20, 12, '#FFFFFF', 150, 0);
+      beep(420, 110, 0.28, 0.12, 'triangle');
+      deaths++; flash = 1; squash = 0;
+      st.vx = st.vx > 20 ? -130 : st.vx < -20 ? 130 : (Math.random() < 0.5 ? -130 : 130); st.vy = -280; st.on = -1; st.coy = 0; st.air = 0;
+      run.grace = now() + 1100; run.freeze = now() + 380;
+      pop('💫', '#fff');
+      return;
+    }
     if (ev & EV_DIE) {
       puff(x0, y0 - 20, 14, '#FFFFFF', 150, 0);
       beep(420, 110, 0.28, 0.12, 'triangle');
@@ -1553,7 +1904,10 @@
       F = tw.ents[tw.stages[st.cp].fi];
       puff(F.px, F.y - 44, 16, '#FFD23F', 170, 1);
       rest = st.cp % tw.per === 0;
-      if (run.mode === 'race') {
+      if (run.mode === 'rope') {
+        // I am at the next flag; it is the team's when everybody stands on it (the server says when)
+        if (st.cp === run.team.flag + 1 && teamNow().on < TEAM.n) { api.sfx('tap'); pop('🚩 ⏳ 🤝 ' + TEAM.on + ' / ' + TEAM.n, '#fff'); }
+      } else if (run.mode === 'race') {
         if (st.cp >= run.end) { if (!run.reached) { run.reached = true; run.endMs = now() - run.goAt; ghostPush(); api.sfx('tagwin'); confetti(); setMode('done'); renderDone(); if (run.n > 1) startLook(-1, 0, true); } }
         else { api.sfx('right'); pop('🚩 ' + (st.cp - run.from) + ' / ' + (run.end - run.from), '#fff'); }
       } else if (st.cp >= tw.n) {
@@ -1593,6 +1947,20 @@
         (ms ? '<div class="obby-dtime">⏱ ' + fmt(ms) + ' ' + medal(run.tower, ms, true) + '</div>' : '') +
         '<div class="obby-dx">' + (r ? extra : '…') + '</div>' +
         (r && r.ch && r.ch.ms ? '<div class="obby-dx">' + CHAPS[r.ch.k % CHAPS.length].icon + ' ⏱ ' + fmt(r.ch.ms) + (r.ch.newBest ? ' ★' : '') + '</div>' : '') + falls + stars + btnsHtml('⏱ Again', !!r) + '</div>';
+    } else if (run.res && run.res.mode === 'rope') {
+      // a rope round is over: how far the team got together, and what everybody earned
+      r = run.res;
+      for (i = 0; i < r.rows.length; i++) {
+        e = r.rows[i];
+        rows += '<li' + (e.key === key ? ' class="me"' : '') + '><b>' + (e.out ? '✖' : '🤝') + '</b><span>' + api.esc(e.name) + '</span><em>🚩 ' + e.flag + (e.stars ? ' · +' + e.stars + ' ⭐' : '') + '</em></li>';
+      }
+      extra = r.won ? (r.rec ? '★ New team record!' : r.best ? 'Team best: ⏱ ' + fmt(r.best) : '') + (r.rank ? (r.rec || r.best ? ' · ' : '') + '🏆 #' + r.rank : '') : '';
+      html = '<div class="obby-dc"><div class="obby-dt">' + (r.won ? '🏆 The team made it!' : '🤝 The rope round is over') + '</div>' +
+        '<div class="obby-dn">' + api.three(MODE_NAME.rope) + ' · ' + api.esc((TOWER_NAME[r.tower] || TOWER_NAME.easy).en) + ' ' + CHAPS[r.ch % CHAPS.length].icon + (r.ch + 1) + '</div>' +
+        '<div class="obby-dtime">🚩 ' + r.flags + ' / ' + r.of + (r.won ? ' · ⏱ ' + fmt(r.ms) : '') + '</div>' +
+        '<div class="obby-dx">↩ 🚩 × ' + r.falls + (deaths ? ' · 💫 × ' + deaths : '') + '</div>' +
+        '<ol class="obby-dl">' + rows + '</ol>' + (extra ? '<div class="obby-dx">' + extra + '</div>' : '') +
+        btnsHtml(r.won && r.ch + 1 < Math.ceil(tw.n / CHAP) ? '🤝 Next: ' + CHAPS[(r.ch + 1) % CHAPS.length].icon + (r.ch + 2) : '🤝 Again', true) + '</div>';
     } else if (run.res) {
       // a race or a lava round is over: everybody and what they got
       r = run.res; race = r.mode === 'race';
@@ -1649,6 +2017,7 @@
               if (m.run.cel >= 0) run.c0 = now() - m.run.cel;
             }
             if (m.run.at) { run.at = m.run.at; run.goAt = run.at - EPOCH - tOff; }
+            if (run.mode === 'rope') setTeam(m.run.team);
             if (m.run.out && !run.spec) { run.out = true; goSpec(); }
           } else resync();
         } else if (m.run && !m.run.fin) api.send({ t: 'obby.quit' });
@@ -1659,7 +2028,30 @@
       case 'obby.who': if (info) { info.who = m.list || []; renderLobby(); } break;
       case 'obby.pt': syncClock(m.now); if (info) { info.pt = m; renderLobby(); } break;
       case 'obby.run': beginRun(m); break;
-      case 'obby.rk': if (run && m.mode === run.mode) run.rk = Array.isArray(m.list) ? m.list : []; break;
+      case 'obby.rk':
+        if (!run || m.mode !== run.mode) break;
+        run.rk = Array.isArray(m.list) ? m.list : [];
+        if (run.mode === 'rope') {
+          ropeChain();
+          setTeam(m.team);
+          // before the start: everybody side by side on the flag, in the order of the rope
+          if (!run.spec && st && run.goAt && now() < run.goAt) { spawn(tw, st); ropeSlot(); run.px = st.x; run.py = st.y; }
+        }
+        break;
+      case 'obby.tf':          // a flag for the rope team: everybody stood on it together
+        if (!run || run.mode !== 'rope' || !st) break;
+        run.team.flag = clamp(parseInt(m.i, 10) || 0, 0, tw.n); run.acked = run.team.flag;
+        o = tw.ents[tw.stages[run.team.flag].fi];
+        puff(o.px, o.y - 44, 22, '#FFD23F', 190, 1);
+        pop('🚩 ' + (run.team.flag - run.from) + ' / ' + (run.end - run.from) + ' 🤝', '#D5F3DB', 0, 2.8);
+        pop('⬆ ' + m.h0 + ' m + ' + (m.h - m.h0) + ' m = ' + m.h + ' m', '#fff', 34, 2.8);      // how high the team is now: a sum to read along
+        if (m.stars) { pop('+' + m.stars + ' ⭐', null, 68, 2.8); api.sfx(m.top ? 'chest' : 'star'); } else api.sfx('right');
+        if (m.top) { run.reached = true; run.endMs = now() - run.goAt; confetti(); } else confetti(26);
+        break;
+      case 'obby.tr':          // the whole team is under its flag: everybody back to it together
+        if (!run || run.mode !== 'rope' || !st) break;
+        setTeam(m);
+        break;
       case 'obby.flag':
         if (!run) break;
         if (m.ok) {
@@ -1714,7 +2106,12 @@
           list = m.p[i];
           if (!list || list[0] === id) continue;
           o = others[list[0]];
-          if (!o) o = others[list[0]] = { id: list[0], x: list[1], y: list[2], tx: 0, ty: 0, f: 1, m: 0, seen: 0 };
+          if (!o) o = others[list[0]] = { id: list[0], x: list[1], y: list[2], tx: list[1], ty: list[2], f: 1, m: 0, seen: 0 };
+          // roped: a jump of the position is a door (or the way back to a flag), and there is more to know about them
+          if (list.length > 5) {
+            if (o.seen && (Math.abs(list[1] - o.tx) > 240 || Math.abs(list[2] - o.ty) > 240)) o.tp = true;
+            o.s = list[5] || 0; o.vx = list[6] || 0; o.vy = list[7] || 0; o.r0 = list[8] || 0; o.r1 = list[9] || 0; o.e = typeof list[10] === 'number' ? list[10] : -1;
+          }
           o.tx = list[1]; o.ty = list[2]; o.f = list[3] < 0 ? -1 : 1; o.m = list[4]; o.seen = seen;
         }
         break;
@@ -1740,7 +2137,27 @@
     if (e.pointerId === touch.id) { touch.id = null; touch.dir = 0; }
     if (touch.jumps[e.pointerId]) { delete touch.jumps[e.pointerId]; touch.n = Math.max(0, touch.n - 1); }
   }
-  function dropTouch() { touch.id = null; touch.dir = 0; touch.jumps = {}; touch.n = 0; }
+  function dropTouch() { touch.id = null; touch.dir = 0; touch.jumps = {}; touch.n = 0; rkeys.hold = rkeys.pull = false; rkeys.hp = rkeys.pp = null; rkShow(); }
+  // the two rope buttons: held down = on
+  function rkShow() {
+    if (!els.rh) return;
+    var h = 'obby-rk h' + (rkeys.hold ? ' on' : ''), p = 'obby-rk p' + (rkeys.pull ? ' on' : '');
+    if (els.rh.className !== h) els.rh.className = h;
+    if (els.rp.className !== p) els.rp.className = p;
+  }
+  function rkDown(e) {
+    var pull = e.currentTarget === els.rp;
+    wake();
+    if (pull) { rkeys.pull = true; rkeys.pp = e.pointerId; } else { rkeys.hold = true; rkeys.hp = e.pointerId; }
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch (err) {}
+    if (e.preventDefault) e.preventDefault();
+    rkShow();
+  }
+  function rkUp(e) {
+    if (e.pointerId === rkeys.pp) { rkeys.pull = false; rkeys.pp = null; }
+    if (e.pointerId === rkeys.hp) { rkeys.hold = false; rkeys.hp = null; }
+    rkShow();
+  }
   function onKey(e) {   // the space bar and the arrows must not scroll the page or press a button
     if (mode !== 'run' && mode !== 'done') return;
     var k = e.key;
@@ -1749,7 +2166,20 @@
 
   // ---------- every frame ----------
   function hudText() {
-    var txt, n, i, a, ch, hearts;
+    var txt, n, i, a, ch, hearts, tm;
+    if (run.mode === 'rope') {
+      // the team's flags and who stands on the next one · the clock · how high the lowest one on the rope is and how far it is to the next flag
+      tm = teamNow();
+      txt = '🚩 ' + (run.team.flag - run.from) + '/' + (run.end - run.from) + (run.reached ? '' : ' · 🤝 ' + tm.on + '/' + tm.n);
+      if (run.watch) txt = '👀 ' + txt;
+      if (txt !== hud.flag) { hud.flag = txt; els.pf.textContent = txt; }
+      txt = '⏱ ' + (run.res && run.res.ms ? fmt(run.res.ms) : run.reached || run.res ? fmt(run.endMs) : now() > run.goAt ? fmt(now() - run.goAt) : '0:00.0');
+      if (txt !== hud.time) { hud.time = txt; els.pt.textContent = txt; els.pt.hidden = mode === 'lobby'; }
+      a = Math.max(0, Math.round(tm.low / 10)); n = Math.round(-tw.stages[Math.min(run.team.flag + 1, tw.n)].base / 10);
+      txt = '⬆ ' + a + ' m' + (run.reached || n <= a ? '' : ' · 🚩 ' + (n - a) + ' m');
+      if (txt !== hud.extra) { hud.extra = txt; els.px.textContent = txt; }
+      return;
+    }
     if (run.mode === 'race') txt = '🚩 ' + (Math.min(st.cp, run.end) - run.from) + '/' + (run.end - run.from);
     else if (run.mode === 'lava') txt = (run.out ? '✖ ' : '') + '🚩 ' + st.cp + ' · ⬆ ' + Math.round(run.maxH / 10) + ' m';
     else txt = '🚩 ' + st.cp + (run.mode === 'tower' ? '/' + tw.n : '');
@@ -1774,7 +2204,7 @@
   function frame() {
     if (!root) return;
     raf = requestAnimationFrame(frame);
-    var t = now() / 1000, dt = lastT ? Math.min(0.1, t - lastT) : 0.016, T = towerTime(), inp, d, n, i, ev, x0, y0, o, id, txt, cut = now() - 1500, el, wait;
+    var t = now() / 1000, dt = lastT ? Math.min(0.1, t - lastT) : 0.016, T = towerTime(), inp, d, n, i, ev, x0, y0, o, id, txt, cut = now() - 1500, el, wait, rope, rl, tx, ty;
     lastT = t;
     if (st && run) {
       wait = run.goAt && now() < run.goAt;                    // 3, 2, 1 ...
@@ -1794,14 +2224,30 @@
         if (!(d > 0) || d > 0.25) { st.T = T - 0.016; d = 0.016; }
         if (d > 0.05) { st.T = T - 0.05; d = 0.05; }
         n = Math.ceil(d / 0.0175); d /= n;
+        rope = run.mode === 'rope';
+        if (rope) { ropeNbs(); rl = ropeLen(tw, run.team.flag); }
         for (i = 0; i < n; i++) {
           x0 = st.x; y0 = st.y;
-          step(tw, st, inp, d);
+          if (rope) {
+            // the rope pulls first, then the step, then the hard stop at the end of the rope
+            step(tw, st, ropeBefore(tw, st, run.rp, NBS, inp, d, rl), d, ROPT);
+            ropeAfter(st, run.rp, NBS);
+            if (run.rp.ev === 1) { beep(520, 760, 0.09, 0.06); squash = -0.7; }
+            else if (run.rp.ev === 2) { beep(420, 880, 0.2, 0.09, 'triangle'); squash = 0.8; puff(st.x, st.y, 8, '#FFE680', 100, 1); }
+          } else step(tw, st, inp, d);
           ev = st.ev;
-          if ((ev & EV_DIE) && now() < run.grace && st.y <= tw.stages[st.cp].base + 170) ev &= ~EV_DIE;   // just back from looking away
+          if ((ev & EV_DIE) && now() < run.grace && (rope || st.y <= tw.stages[st.cp].base + 170)) ev &= ~EV_DIE;   // just back from looking away (roped: just knocked over)
           if (ev) onEvents(ev, x0, y0);
           if (ev & EV_DIE) break;
           if (!run || !st) return;
+        }
+        if (rope) {
+          // how fast I really move, for the others on the rope (a jump of the position is not a speed)
+          x0 = st.x - run.px; y0 = st.y - run.py; run.px = st.x; run.py = st.y;
+          if (Math.abs(x0) > 1100 * dt + 14 || Math.abs(y0) > 1100 * dt + 14 || run.rp.ev === 2) { run.evx = 0; run.evy = 0; }
+          else { run.evx = clamp(x0 / dt, -950, 950); run.evy = clamp(y0 / dt, -950, 950); }
+          // under the team's flag with no rope to hold me (a door between us, or nobody left to be tied to): back to that flag
+          if (run.team.flag > 0 && st.y > tw.stages[Math.min(run.team.flag, tw.n)].base + 230 && ropeFree()) ropeHome(false);
         }
       } else if (!run.spec && look && st.on >= 0) {
         // looking away: my player waits (and rides along if it stands on something that moves)
@@ -1820,11 +2266,20 @@
       }
       if (!run.spec) {
         // tell the server where we are, and which flag we stand at (asked again until it says yes)
-        if (now() - run.lastPos > 95) {
+        if (run.mode === 'rope') {
+          // Roped: twenty times a second, with what the others need for their end of the rope: what I am doing, how fast I
+          // move, the rope I took in or gave, the platform I stand on, and whether that is a flag (the server counts those).
+          if (now() - run.lastPos > 45) {
+            run.lastPos = now();
+            api.send({ t: 'obby.pos', x: Math.round(st.x), y: Math.round(st.y), f: st.f, m: st.on < 0 ? 2 : Math.abs(st.vx) > 30 ? 1 : 0,
+              s: run.rp.bits, vx: Math.round(run.evx), vy: Math.round(run.evy), r0: ropeSay(-1), r1: ropeSay(1), on: st.on,
+              fl: st.on >= 0 && tw.ents[st.on].k === 'f' ? tw.ents[st.on].flag : -1 });
+          }
+        } else if (now() - run.lastPos > 95) {
           run.lastPos = now();
           api.send({ t: 'obby.pos', x: Math.round(st.x), y: Math.round(st.y), f: st.f, m: st.on < 0 ? 2 : Math.abs(st.vx) > 30 ? 1 : 0 });
         }
-        if (run.acked < Math.min(st.cp, run.end) && !run.dead && now() - run.lastClaim > 600) { run.lastClaim = now(); api.send({ t: 'obby.flag', i: run.acked + 1 }); }
+        if (run.mode !== 'rope' && run.acked < Math.min(st.cp, run.end) && !run.dead && now() - run.lastClaim > 600) { run.lastClaim = now(); api.send({ t: 'obby.flag', i: run.acked + 1 }); }
         if (run.mode === 'race' && !wait && !run.reached) while (run.rec.length * GHOST_DT <= now() - run.goAt && run.rec.length < 1999) ghostPush();
       }
       // 3, 2, 1, go
@@ -1850,6 +2305,13 @@
     for (id in others) {
       o = others[id];
       if (o.seen < cut) { delete others[id]; continue; }
+      tx = o.tx; ty = o.ty;
+      if (o.vx || o.vy) {      // roped: they said how fast they move, so they run on between two messages (the rope needs them where they are now)
+        d = Math.min(0.12, (now() - o.seen) / 1000); tx += o.vx * d; ty += o.vy * d;
+        if (Math.abs(tx - o.x) > 220 || Math.abs(ty - o.y) > 220) { o.x = tx; o.y = ty; }
+        else { d = 1 - Math.exp(-dt * 22); o.x += (tx - o.x) * d; o.y += (ty - o.y) * d; }
+        continue;
+      }
       if (Math.abs(o.tx - o.x) > 220 || Math.abs(o.ty - o.y) > 220) { o.x = o.tx; o.y = o.ty; }
       else { d = 1 - Math.exp(-dt * 14); o.x += (o.tx - o.x) * d; o.y += (o.ty - o.y) * d; }
     }
@@ -1955,7 +2417,7 @@
   // what stands on a rest platform: a chest (a heart in the endless tower) and a sign for the chapter that begins here
   function drawRest(F, t) {
     var x = F.px + 60 <= F.x + F.w - 26 ? F.px + 60 : F.px - 60, sx = x > F.px ? F.px - 54 : F.px + 54, y = F.y, s, got, k = Math.floor(F.flag / tw.per), u;
-    got = !!st && st.cp >= F.flag;
+    got = !!st && (run && run.mode === 'rope' ? run.team.flag : st.cp) >= F.flag;
     if (tw.def.gen) {
       if (!got) { u = Math.sin(t * 3 + F.flag) * 4; heart(c, x, y - 34 + u, 13); c.fillStyle = '#FF4F6D'; c.fill(); ol(c, 3); c.fillStyle = 'rgba(255,255,255,0.6)'; c.beginPath(); c.arc(x - 6, y - 40 + u, 3.2, 0, TAU); c.fill(); }
     } else {
@@ -1978,6 +2440,82 @@
     c.fillStyle = NAVY;
     for (i = 0; i < n; i++) c.fillRect(x0 + i * w, y - 104 + (i % 2) * 13, w, 13);
     c.beginPath(); c.rect(x0, y - 104, x1 - x0, 26); ol(c, 3);
+  }
+  // Rope Team, over the next flag: one dot for everybody on the rope, in their colour once they stand on the flag.
+  // The flag is the team's when all the dots are filled.
+  function drawTeamMarks(F) {
+    var ch = run.chain, n = ch.length, pl = api.players(), mine = String(api.myId()), me = api.self() || ME, w = n * 22 + 12, x0 = F.px - w / 2, y = F.y - (F.flag === run.end ? 124 : 84), i, o, p, on;
+    if (!n) return;
+    rr(c, x0, y - 13, w, 26, 13); c.fillStyle = 'rgba(255,255,255,0.92)'; c.fill(); ol(c, 2.5);
+    for (i = 0; i < n; i++) {
+      if (String(ch[i]) === mine) { p = me; on = !run.spec && st.on === F.i; }
+      else { o = others[ch[i]]; p = pl[ch[i]] || ME; on = !!o && (o.s & RB_G) !== 0 && o.e === F.i; }
+      c.beginPath(); c.arc(x0 + 17 + i * 22, y, 7, 0, TAU); c.fillStyle = on ? p.color || '#58C06B' : '#fff'; c.fill(); ol(c, 2.5);
+      if (on) { c.strokeStyle = '#fff'; c.lineWidth = 2.2; c.beginPath(); c.moveTo(x0 + 13.5 + i * 22, y); c.lineTo(x0 + 16 + i * 22, y + 3); c.lineTo(x0 + 21 + i * 22, y - 3); c.stroke(); }
+    }
+  }
+  // ---------- drawing the rope ----------
+  var RPT = [0, 0, 0, 0, 0, 0], RA = { x: 0, y: 0, ok: false }, RB = { x: 0, y: 0, ok: false };
+  // where the rope is tied on somebody: at the belt
+  function ropeAt(id, out) {
+    var o;
+    if (String(id) === String(api.myId())) { out.ok = !run.spec && !!st; if (out.ok) { out.x = st.x; out.y = st.y - 20; } }
+    else { o = others[id]; out.ok = !!o; if (o) { out.x = o.x; out.y = o.y - 20; } }
+    return out.ok;
+  }
+  // the line of a rope: n points from RPT (two, or three when it runs over an edge), the last part hanging through by `sag`
+  function ropeTrace(n, sag, ox, oy) {
+    var x0 = RPT[0] + ox, y0 = RPT[1] + oy, x1, y1;
+    c.beginPath(); c.moveTo(x0, y0);
+    if (n === 3) { x0 = RPT[2] + ox; y0 = RPT[3] + oy; c.lineTo(x0, y0); x1 = RPT[4] + ox; y1 = RPT[5] + oy; }
+    else { x1 = RPT[2] + ox; y1 = RPT[3] + oy; }
+    if (sag > 1) c.quadraticCurveTo((x0 + x1) / 2, (y0 + y1) / 2 + sag * 2, x1, y1); else c.lineTo(x1, y1);
+  }
+  // A rope with some body to it: a soft shadow on the wall, a navy outline, the cord and the twist of its strands.
+  // tight 0..1: it gets thinner and turns from sand to orange the more it is stretched.
+  function ropeDraw(n, sag, tight, apart) {
+    c.lineCap = 'round'; c.lineJoin = 'round';
+    if (apart) {          // let go for now (a door between the two): only a faint dotted line
+      c.globalAlpha = 0.45; c.setLineDash([3, 11]); ropeTrace(n, 0, 0, 0); c.lineWidth = 4; c.strokeStyle = NAVY; c.stroke(); c.setLineDash([]); c.globalAlpha = 1;
+      return;
+    }
+    ropeTrace(n, sag, 3, 5); c.strokeStyle = 'rgba(27,42,73,0.15)'; c.lineWidth = 8; c.stroke();
+    ropeTrace(n, sag, 0, 0); c.strokeStyle = NAVY; c.lineWidth = 8 - tight * 1.6; c.stroke();
+    c.strokeStyle = tight > 0.03 ? mix(ROPE_COL, ROPE_HOT, tight) : ROPE_COL; c.lineWidth = 4.6 - tight * 1.2; c.stroke();
+    c.setLineDash([4, 6]); c.strokeStyle = 'rgba(255,255,255,0.6)'; c.lineWidth = 1.7; c.stroke(); c.setLineDash([]);
+  }
+  // pass 0: the ropes between everybody who is tied (behind the climbers) · pass 1: the knots at their belts (in front)
+  function drawRopes(pass) {
+    var ch = run.chain, mine = String(api.myId()), L = ropeLen(tw, run.team.flag), i, k, d, n, st2, me, len, pl = api.players(), p, a, b, low;
+    if (pass === 1) {
+      for (i = 0; i < ch.length; i++) {
+        if (!ropeAt(ch[i], RA) || ch.length < 2) continue;
+        p = String(ch[i]) === mine ? api.self() || ME : pl[ch[i]] || ME;
+        c.beginPath(); c.arc(RA.x, RA.y, 5.5, 0, TAU); c.fillStyle = ROPE_COL; c.fill(); ol(c, 2.5);
+        c.beginPath(); c.arc(RA.x, RA.y, 2, 0, TAU); c.fillStyle = p.color || '#fff'; c.fill();
+      }
+      return;
+    }
+    for (i = 0; i + 1 < ch.length; i++) {
+      if (!ropeAt(ch[i], RA) || !ropeAt(ch[i + 1], RB)) continue;
+      // my own ropes: this tablet knows how they run; a rope between two others is drawn straight from one to the other
+      me = String(ch[i]) === mine ? 1 : String(ch[i + 1]) === mine ? 2 : 0;
+      k = me ? run.links[me === 1 ? ch[i + 1] : ch[i]] : null;
+      d = Math.sqrt((RA.x - RB.x) * (RA.x - RB.x) + (RA.y - RB.y) * (RA.y - RB.y));
+      len = k ? k.len : L; st2 = k ? k.st : d - L; n = 2;
+      if (k && k.wrap) {
+        // over the edge of a platform: from the one who stands, along the top to the corner, then down to the one who hangs
+        if ((k.wrap === 2) === (me === 1)) { RPT[0] = RA.x; RPT[1] = RA.y; RPT[4] = RB.x; RPT[5] = RB.y; } else { RPT[0] = RB.x; RPT[1] = RB.y; RPT[4] = RA.x; RPT[5] = RA.y; }
+        RPT[2] = k.wx; RPT[3] = k.wy - 4; n = 3;
+        ropeDraw(3, clamp(-st2 * 0.4, 0, 60), clamp(st2 / ROPE.X, 0, 1), false);
+        continue;
+      }
+      RPT[0] = RA.x; RPT[1] = RA.y; RPT[2] = RB.x; RPT[3] = RB.y;
+      // slack rope hangs through in a bow; between two who stand it lies down on the ground instead of sinking into it
+      a = String(ch[i]) === mine ? st.on >= 0 : !!(others[ch[i]].s & RB_G); b = String(ch[i + 1]) === mine ? st.on >= 0 : !!(others[ch[i + 1]].s & RB_G);
+      low = a && b ? Math.max(4, 17 - Math.abs(RA.y - RB.y) * 0.5) : 70;
+      ropeDraw(2, Math.min(low, clamp((len - d) * 0.42, 0, 70) + 3), clamp(st2 / ROPE.X, 0, 1), !!(k && k.apart) || (!k && d > L + ROPE.X + 140));
+    }
   }
   // pass 0: wind and shadows on the wall · pass 1: platforms and lava · pass 2: things that hurt, doors, flags
   function drawStage(stg, pass, T, t) {
@@ -2096,8 +2634,9 @@
             for (j = 0; j < 3; j++) { a = t * 1.6 + j * TAU / 3; star(c, x + Math.cos(a) * 38, y - 44 + u + Math.sin(a) * 22, 4 + Math.sin(t * 5 + j) * 1.5); c.fillStyle = '#FFF6B0'; c.fill(); ol(c, 1.5); }
           } else {
             if (F.flag > 0 && F.flag % tw.per === 0) drawRest(F, t);
-            if (run && run.mode === 'race' && F.flag === run.end) drawGate(F);
-            d = st ? st.cp >= F.flag : false;
+            if (run && (run.mode === 'race' || run.mode === 'rope') && F.flag === run.end) drawGate(F);
+            d = st ? (run && run.mode === 'rope' ? run.team.flag : st.cp) >= F.flag : false;      // roped: green when it is the team's
+            if (run && run.mode === 'rope' && F.flag === run.team.flag + 1 && !run.reached) drawTeamMarks(F);
             c.fillStyle = 'rgba(27,42,73,0.18)'; c.beginPath(); c.ellipse(x + 3, y, 11, 4, 0, 0, TAU); c.fill();
             c.strokeStyle = NAVY; c.lineWidth = 6; c.lineCap = 'round'; c.beginPath(); c.moveTo(x, y - 1); c.lineTo(x, y - 62); c.stroke();
             c.strokeStyle = '#E8EEF7'; c.lineWidth = 2.5; c.stroke();
@@ -2178,9 +2717,9 @@
   }
   // the soft shadow under the player: on the platform below, smaller the higher the jump
   function drawShadow(T) {
-    var y = 1e9, si, i, list, e, d;
+    var y = 1e9, si, i, list, e, d, sc = run && run.mode === 'rope' ? stageOf(tw, st.y - 1, st.cp) : st.cp;
     if (st.on >= 0) y = st.y;
-    else for (si = Math.max(0, st.cp - 1); si <= Math.min(tw.n, st.cp + 1); si++) {
+    else for (si = Math.max(0, sc - 1); si <= Math.min(tw.n, sc + 1); si++) {
       list = tw.stages[si].list;
       for (i = 0; i < list.length; i++) {
         e = tw.ents[list[i]];
@@ -2274,7 +2813,8 @@
       for (i = lo; i <= hi; i++) drawStage(tw.stages[i], 2, T, t);
     }
     if (st && run) {
-      c.globalAlpha = 0.72;
+      if (run.mode === 'rope') drawRopes(0);
+      c.globalAlpha = run.mode === 'rope' ? 1 : 0.72;      // (the others on my rope are as solid as I am)
       for (id in others) {
         o = others[id]; p = pl[id];
         if (!p || o.y < y0 - 40 || o.y > y1 + 80) continue;
@@ -2292,6 +2832,7 @@
         drawGuy(me, st.x, st.y, st.f, st.on >= 0 && Math.abs(st.vx) > 30 && !look ? 1 : 0, t, squash, true);
         c.globalAlpha = 1;
       }
+      if (run.mode === 'rope') drawRopes(1);
     }
     for (i = 0; i < parts.length; i++) {
       o = parts[i]; c.globalAlpha = Math.min(1, (1 - o.life / o.max) * 1.6); c.fillStyle = o.col;
@@ -2338,11 +2879,14 @@
     onMessage: onMessage,
     onPlayers: function () { if (root && mode === 'lobby') renderLobby(); },
     // for the test bot (scratch tests load this file in Node and play the stages)
-    _sim: { TOWERS: TOWERS, tower: tower, dayTower: dayTower, genTower: genTower, build: build, step: step, spawn: spawn, newState: newState, pos: pos, consts: { G: G, JUMP: JUMP, RUN: RUN, COYOTE: COYOTE } },
+    _sim: { TOWERS: TOWERS, tower: tower, dayTower: dayTower, genTower: genTower, build: build, step: step, spawn: spawn, newState: newState, pos: pos, consts: { G: G, JUMP: JUMP, RUN: RUN, COYOTE: COYOTE },
+      rope: { ROPE: ROPE, ROPT: ROPT, before: ropeBefore, after: ropeAfter, newRope: newRope, newLink: newLink, say: linkSay, len: ropeLen, stageOf: stageOf, G: RB_G, HOLD: RB_HOLD, PULL: RB_PULL, SUP: RB_SUP } },
     // for the tests in the browser: what the screen is doing right now
     _dbg: function () {
       return { mode: mode, tab: tab, camY: cam.y, vh: vh, gap: gap, look: look ? { id: look.id, auto: look.auto } : null, others: Object.keys(others),
         st: st ? { x: st.x, y: st.y, cp: st.cp, on: st.on } : null,
+        rope: run && run.mode === 'rope' ? { team: run.team, chain: run.chain.slice(), bits: run.rp.bits, hold: rkeys.hold, pull: rkeys.pull,
+          links: Object.keys(run.links).map(function (id) { var k = run.links[id]; return { id: id, d: Math.round(k.d), len: Math.round(k.len), st: Math.round(k.st), reel: Math.round(k.reel), ext: Math.round(k.ext), wrap: k.wrap, apart: k.apart }; }) } : null,
         run: run ? { mode: run.mode, tower: run.tower, from: run.from, end: run.end, acked: run.acked, spec: run.spec, out: run.out, reached: run.reached, hearts: run.hearts, n: run.n, rec: run.rec.length, ghost: run.ghost ? run.ghost.ms : 0 } : null };
     }
   };

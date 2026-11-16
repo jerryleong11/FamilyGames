@@ -54,7 +54,7 @@ The server sends its version in the `welcome` message. When the live server rest
 | Path | Use |
 |---|---|
 | `/` and static files | Game pages from `public/` |
-| `GET /api/status` | `{version, players, names}`; used by the release tool |
+| `GET /api/status` | `{version, players, names}`; used by the release tool. Also `{released, latest, started, srv, pub}` for the version label on the tablets: when this copy was released, the release `live.json` wants to be live, when the server started, and (working copy only) when a server file / a page file last changed |
 | `GET /api/gallery` | List of gallery pictures, newest first |
 | `POST /api/gallery` | `{name, img}` (PNG data URL) hangs a picture |
 | `/gallery/<file>.png` | A gallery picture |
