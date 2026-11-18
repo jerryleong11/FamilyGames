@@ -221,6 +221,77 @@ The owner's words: "Rope game can add on how many person in group, 2, 3, 4 (max)
 - **Looked at:** the builder's pictures from a headless desktop browser, and by hand in four browser tabs at 800x480: the three tower cards, the Rope lobby, two against two picking Red and Blue, the countdown, both ropes on screen from both sides, leaving a round, and the start of a Dragon Tower climb. **Not tried:** real tablets and touch, a rope round climbed by hand to the top, three or four on one rope in a browser, most stages, the Dragon Tower in a lava round or a race. The lava speeds of the Hard and the Dragon tower are guesses.
 - **Known:** a slab crumbles on each tablet on its own, so a teammate can be seen standing on one that is gone on your screen; the rope buttons Join / Switch / Leave / Full are English only, like Ready! before.
 
+### Who is playing: a level per player (2026-11-18, in `dev/`, see git log for whether it is released)
+
+The owner asked which games could be made deeper so that they suit the children and still challenge the adults. The answer started with one thing every game can use: each player says who they are, and a game gives each tablet its own difficulty in the same round. He chose that together with a deeper Monster Cave.
+
+- **Join screen:** the tick box "I am a grown-up" is now three buttons after "I am": 🐣 Little (about 6), 🧒 Big kid (about 8), 🧑 Grown-up. The choice is remembered on the device (`ft_skill`) and sent with `join` as `skill` 0, 1 or 2. A grown-up is still drawn taller (`big`).
+- **The first time** a tablet has no choice yet and Play asks for one. A tablet that had the grown-up box ticked is a grown-up without being asked. After the release that brings this, the children's tablets therefore stop once at the join screen: the 6-year-old needs somebody to tap Little with him.
+- **Saved** as `skill` in the profile. A page that does not say (an old page, a test) keeps what the profile has; a profile from before is a grown-up if it was drawn as one, otherwise a big kid.
+- **For the games:** `p.skill` on the server, `api.players()[id].skill` and `api.self().skill` on the tablets (`docs/GAME-MODULES.md`). Everybody earns the same stars whatever their level. It is called skill in the code because "level" already means the star level.
+- **Uses it so far:** Monster Cave (next section). Still to do in the other games: the Race Track (steering help and faster robots), the Escape Room and Rocket Base (who gets the harder clues), Monopoly (robot strength).
+- **Tested:** 15 protocol checks on a private server (the three values, old pages, old and damaged saves, a later change) and the join screen by hand in a desktop browser at 800x480. Not tried on a tablet. At 800x480 the join card was already a little taller than the screen and scrolls, as before.
+
+### Monster Cave: numbers of your own size, six bosses, roles (2026-11-18, in `dev/`, see git log for whether it is released)
+
+The first game that uses the level per player. Before, the whole team added up to one number on the boss's shield; a grown-up had nothing to think about and a 6-year-old could not follow. Now the shield has one rune per fighter, in that fighter's colour, and the number on it is made for that fighter.
+
+- **The numbers per level** (lowest to highest rune on Easy / Normal / Hard, and how far a bonus rune goes up):
+
+  | | Easy | Normal | Hard | bonus step | never above | how |
+  |---|---|---|---|---|---|---|
+  | 🐣 Little | 5–8 | 6–9 | 7–10 | +1 | 10 | adding only; dots to count under every orb and in the own sum |
+  | 🧒 Big kid | 10–15 | 12–20 | 18–30 | +3 | 30 | adding; minus gems (−1 to −5, at most three on the floor) on Hard |
+  | 🧑 Grown-up | 30–54 | 40–72 | 54–99 | +9 | 99 | a times pad, ×1 to ×9 |
+
+  - The orbs (1 to 9) lie on the floor for everybody and are picked up by walking over them. At the cannon a child's orbs go into the child's own sum by themselves. A grown-up's do not: one tap on ×n loads the next orb times n (keys 1 to 9 on a laptop), so 56 is an orb 7 loaded ×8. A grown-up's bonus runes, and half the runes on Hard, are numbers outside the times tables and need two loads (59 = 7×8 + 3).
+  - A Little fighter cannot pick up a minus gem or an orb bigger than the own rune (those are faded on that tablet).
+  - Once a second the server checks that every fighter's rune can still be made from what that fighter may take, and adds a fitting orb if not.
+- **The shot:** the cannon fires when every fighter who is in the cave and awake has lit their rune. Whoever is done early gets a bonus rune one step harder; every bonus rune lit before the shot adds 1 damage, at most 3 (so a shot does 1 to 4). At full power nobody gets another bonus rune, so the fast ones go and help. Boss HP is as before (9 / 8 / 7, plus 3 / 3 / 2 per further fighter).
+- **Going over** empties only your own sum. A Big kid or a Grown-up makes the boss angry for 6 s (was 8 s); a Little fighter does not.
+- **Nobody holds up the shot:** someone who leaves or loses the connection does not count (the rune is kept if they come back during the same shield). Someone who neither steps nor loads for 20 s is asleep (a z on their rune) and does not count until the next step; without that a tablet left lying in the cave blocked every shot. A late joiner gets a bonus rune at once and a rune of the shield with the next one.
+- **Kinder to the little ones:** the boss aims at Little : Big kid : Grown-up as 1 : 2 : 3; a Little fighter keeps the orbs when knocked down; back on the feet nothing hits for 4.5 / 2.5 / 1.5 s. The pace of the attacks follows only the difficulty.
+- **Six bosses** (beating one opens the next; a boss can be fought when anybody in the cave has opened it):
+
+  | Boss | Attacks | Twist |
+  |---|---|---|
+  | Slime King | slime balls, little slimes, a rock | belly slams leave a sticky puddle (half speed) |
+  | Rock Golem | beams, boulder lanes, a quake at the cannon, rocklings | the roof comes down: only three green ledges are safe |
+  | Fire Dragon | fans of fire, a wall of fire, sprites, a fireball | meteors leave burning ground |
+  | Coral Crab (珊瑚蟹, Ketam Karang) | a claw on one side then the other, rows of bubbles with a gap, scuttling shells | the cannon drifts on a raft |
+  | Clock Tortoise (时钟龟, Kura-kura Jam) | a clock hand sweeping round, alarm rings with a long fuse, a cog that comes back | every 21 s or so the orbs change places |
+  | Storm Owl (风暴猫头鹰, Burung Hantu Ribut) | feathers on every other square then the squares between, whirlwinds, walls of wind | every 17 s or so a gust pushes everybody sideways |
+
+  Every attack is announced first (a red zone, a marked lane). Rolling things and minions are attacks without a red zone, so a fight can go 20 to 40 s without one.
+- **Four roles**, picked on a card in the lobby and remembered (`profile.boss.role`); a newcomer gets the role the fewest others have:
+
+  | Role | Button (cooldown) | Without the button |
+  |---|---|---|
+  | 🛡 Guard | a bubble where they stand, 5 s, nothing hits inside (18 s) | keeps the orbs when hit, down 1.2 s instead of 2 s |
+  | 💚 Healer | everybody who is down gets up at once, with the orbs that rolled away; not used up when nobody is down (10 s) | friends nearby are down 1 s, the Healer 1.2 s |
+  | 🧲 Collector | pulls the orbs within reach into a ring at the feet (12 s) | carries 5 instead of 3 |
+  | ⚡ Runner | a 1.3 s dash that nothing can hit (7 s) | walks 12% faster |
+
+- **Stars:** unchanged per fight (10 / 14 / 18, 3 for a helper who loaded nothing, 2 when the boss escapes, 2 after the fifth win of a day) and the same for every level and role. Six first-win bonuses of 10 instead of three, so 30 more one-off stars per player.
+- **Saved:** `profile.boss.w` (wins per boss and difficulty) and `.bt` (best time per boss) grow from three entries to six; `role` is new. Nothing renamed. The released v8 loads such a save and keeps the extra entries (tried).
+- **How it is built:** `dev/games/boss.js` and `dev/public/games/boss.js` only. New from the tablet: `boss.role {r}`, `boss.load {m}` (a grown-up's ×m), `boss.act` (the ability). New to the tablets: `boss.lit`, `boss.runes`, `boss.pud`, `boss.wind`, `boss.tw`, `boss.act`, `boss.no`. A rune travels as `[id, number, sum, bonus step, has a rune of this shield, lit, skill, role, asleep]`. The numbers to tune are at the top of the server file: `BAND` (the runes per level), `DIFF`, `KIND`, `ROLE`, `UP_SAFE`, `IDLE_MS`, `BONUS_CAP`. `BOSS_SPEED` (a faster fight clock) and `BOSS_LIMIT_MS` exist for tests only.
+- **The lobby** lost its trophy shelf: wins and best time sit on the six boss cards, and a box shows the number range of each level for the chosen difficulty.
+- **Tests** (scratch scripts, not in the repository): a protocol test over real sockets with 179 checks (the runes per level and their bands, own sums, the times pad, minus gems, going over, bonus runes and the cap, leaving, coming back, falling asleep, a late joiner, every role, the six bosses and their unlock chain, pay, the daily cap); a run on a copy of the live save (wins, best times and stars unchanged, only the new fields added); the rollback check with v8.
+  - Two checks of that test were timing luck and failed when run again for the review; both were the test, not the game. It waited at most 20 s for a red zone (over 72 short fights the boss attacked every 6.4 s on average, but 4 of them had no red zone in the first 21 s), and it reported a hit 50 ms before the server takes one (a tablet reports it half a second later). Both waits were widened.
+  - **Can it be won?** With perfect play every one of the 72 cases (six bosses, three difficulties, the three levels alone and a family of four) wins, in 0:18 to 1:34. With slow simulated fighters (four fights per case; how slow a 6- and an 8-year-old really are is the builder's guess, nobody measured):
+
+    | | Easy | Normal | Hard |
+    |---|---|---|---|
+    | Little alone | 24 of 24, 4:11 | 10 of 24 | 5 of 24 |
+    | Big kid alone | 24 of 24, 2:29 | 24 of 24, 3:12 | 16 of 24 |
+    | Grown-up alone | 24 of 24, 1:32 | 24 of 24, 1:33 | 24 of 24, 2:10 |
+    | Little, Big kid and two Grown-ups | 24 of 24, 3:20 | 23 of 24, 4:08 | 20 of 24, 4:15 |
+
+    In those family fights each child is knocked down about 5 times on Easy, 10 on Normal and 16 on Hard.
+- **Looked at:** the builder's pictures from a headless browser at 800x480 and 1280x800 (lobby, each level's fight screen, eight fighters, the signature moves, the shot, the result), and by hand in three browser tabs at 800x480 as Little, Big kid and Grown-up: the lobby with the three ranges, the fight with a rune each, walking, picking up, a grown-up's 1×4 + 6×5 = 34 on the times pad with real taps, the shot, the next shield, the sleepers' z, the Little tablet's dots and faded orbs and its automatic loading.
+- **Not tried:** real tablets and touch (thumb reach to the times pad at the top right, the size of the dots for a 6-year-old, speed on the old tablets, whether 🧲 🧒 🧑 exist in the tablets' emoji font), a whole fight played by hand, any real child. The role balance is a guess.
+- **Known:** a Little fighter alone is only safe on Easy. A grown-up alone wins in two or three minutes for full stars (the five paid wins a day are the only brake). On Hard everybody is knocked down often. Orbs are still picked up by walking over them, so a grown-up with an unwanted orb in the hands must drop it first. A child's orbs load by themselves, so a wrong orb carried to the cannon goes in and empties the sum. The dot plates under neighbouring orbs can overlap. The times pad uses a CSS grid.
+
 ## 9. Practical notes
 
 - One-time setup on the laptop: install Node.js LTS, allow Node through Windows Firewall on Private networks, reserve a fixed IP for the laptop in the router.
