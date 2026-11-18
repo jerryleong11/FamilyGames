@@ -65,7 +65,7 @@ Client to server:
 
 | `t` | Meaning |
 |---|---|
-| `join` | name, colour, hat, grown-up flag; loads or creates the profile |
+| `join` | name, colour, hat, `big` (drawn as a grown-up), `skill` (who is playing: 0 little, 1 big kid, 2 grown-up); loads or creates the profile |
 | `move` | x, y, facing, moving; sent about 12 times a second in town |
 | `room` | enter `town` or `studio` |
 | `emote` | show an emote above the avatar |

@@ -39,7 +39,12 @@ module.exports = function (api) {
 ```
 
 A player `p` has: `id` (changes on reconnect), `key` (lower-case name, stable), `name`, `color`, `hat`, `big`,
-`stars` (earned in total), `outfit`, `car`, `room`, `x`, `y` (town position).
+`skill`, `stars` (earned in total), `outfit`, `car`, `room`, `x`, `y` (town position).
+
+`p.skill` is who is playing, picked on the join screen and saved in the profile: `0` little (about 6),
+`1` big kid (about 8), `2` grown-up. Use it to give every tablet its own difficulty in the same round (the
+numbers, the speed, how much help), so a game is neither too hard for the 6-year-old nor too easy for the
+parents. Everybody still earns the same stars. `big` is only how the avatar is drawn.
 
 | Call | What it does |
 |---|---|
@@ -119,7 +124,7 @@ Anything that could be farmed (instant restarts, trading back and forth) needs a
 | `api.myId()` | my player id (changes after a reconnect) |
 | `api.me()` | my numbers: `{ stars, coins, lv, lvAt, lvNext, owned, quests }`, or `null` before they arrive |
 | `api.self()` | my entry in `api.players()` |
-| `api.players()` | object id -> `{ id, name, color, hat, big, lv, room, outfit, car, drive, ext, x, y }` (x, y are town positions) |
+| `api.players()` | object id -> `{ id, name, color, hat, big, skill, lv, room, outfit, car, drive, ext, x, y }` (x, y are town positions; `skill` as on the server) |
 | `api.drawAvatar(c, p, x, y, t, o)` | draws player `p` as they look in town with their feet at (x, y). `o`: `{ scale, facing: 1 or -1, moving: bool, car: true to draw their car instead }`. Returns the height drawn |
 | `api.nameTag(c, p, x, y, isMe)` | the name pill with the level, bottom edge at `y`, centred on `x`. Returns its height |
 | `api.label(c, text, x, y, bg, fg, size)` | a small pill label |
@@ -157,7 +162,7 @@ Town positions of players are `api.players()[id].x / .y`; only players with `roo
   room sees everybody else move, with their real avatar and name tag. A late joiner can come in mid-game or
   watch until the next round. A player who leaves or disconnects must not freeze the game for the others.
 - **Ages 6 and 8, plus parents.** No reading needed to play: icons, numbers, colours. Forgiving: no permanent
-  loss, quick retry. Where it fits, an easy and a harder setting.
+  loss, quick retry. Where it fits, an easy and a harder setting, and each player's own difficulty from `p.skill`.
 - **No word or vocabulary learning.** No word cards, no spelling or translation questions. Names of things
   (pets, items, quests) are shown in English, Chinese with pinyin, and Malay, as labels only.
 - **Maths stays inside play**: prices, counting, adding to a target, change. Show the sum when stars are spent
@@ -183,7 +188,7 @@ curl -s http://localhost:31xx/api/shutdown                                 # sto
 ```
 
 - Protocol tests: a Node script with the `ws` package from `node_modules/ws`, joining as one or more players:
-  `ws.send(JSON.stringify({ t: 'join', name: 'Ann', color: '#FF7A45', hat: 0, big: false }))`, then
+  `ws.send(JSON.stringify({ t: 'join', name: 'Ann', color: '#FF7A45', hat: 0, big: false, skill: 1 }))`, then
   `{ t: 'room', room: '<id>' }`, then the module's messages. To give a test player stars, write a `save.json`
   into the scratch data folder before starting (`{ "profiles": { "ann": { "name": "Ann", "stars": 500 } }, "family": 500, "gallery": [] }`).
 - `node --check <file>` on both files.

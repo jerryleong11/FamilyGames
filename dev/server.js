@@ -119,7 +119,7 @@ function inRoom(room) { return function (p) { return p.room === room; }; }
 function roomList(room) { return Array.from(players.values()).filter(inRoom(room)).sort(function (a, b) { return a.id - b.id; }); }
 const extenders = {}; // game id -> function (player) that returns what everyone may see of that player (a pet, a trophy...)
 function pub(p) {
-  const o = { id: p.id, name: p.name, color: p.color, hat: p.hat, big: p.big, stars: p.stars, lv: SHOP.levelOf(p.stars), room: p.room, outfit: p.outfit, car: p.car, drive: p.drive };
+  const o = { id: p.id, name: p.name, color: p.color, hat: p.hat, big: p.big, skill: p.skill, stars: p.stars, lv: SHOP.levelOf(p.stars), room: p.room, outfit: p.outfit, car: p.car, drive: p.drive };
   Object.keys(extenders).forEach(function (id) {
     try { const v = extenders[id](p); if (v !== undefined && v !== null) { o.ext = o.ext || {}; o.ext[id] = v; } } catch (e) { console.error('ext "' + id + '":', e.message); }
   });
@@ -363,10 +363,16 @@ function onJoin(ws, m) {
   prof.color = /^#[0-9a-fA-F]{6}$/.test(m.color) ? m.color : '#FF7A45';
   prof.hat = clamp(parseInt(m.hat, 10) || 0, 0, 3);
   prof.big = !!m.big;
+  // Who is playing: 0 little (about 6), 1 big kid (about 8), 2 grown-up. The games size numbers and speed by it.
+  // A page that does not say (an old page, a test) keeps what the profile has; a profile from before the
+  // question was asked is a grown-up if it was drawn as one, else a big kid.
+  const skill = parseInt(m.skill, 10);
+  if (skill >= 0 && skill <= 2) prof.skill = skill;
+  else if (!(prof.skill >= 0 && prof.skill <= 2)) prof.skill = prof.big ? 2 : 1;
   growProfile(prof);
   saveSoon();
   const spot = { x: WORLD.spawn.x + rnd(-90, 90), y: WORLD.spawn.y + rnd(-50, 50) };
-  const p = { id: nextId++, ws: ws, key: key, name: name, color: prof.color, hat: prof.hat, big: prof.big, stars: prof.stars, outfit: enforce('outfit', cleanDesign(prof.outfit), prof), car: enforce('car', cleanDesign(prof.car), prof), drive: false, x: spot.x, y: spot.y, f: 1, m: 0, room: 'town', alive: true };
+  const p = { id: nextId++, ws: ws, key: key, name: name, color: prof.color, hat: prof.hat, big: prof.big, skill: prof.skill, stars: prof.stars, outfit: enforce('outfit', cleanDesign(prof.outfit), prof), car: enforce('car', cleanDesign(prof.car), prof), drive: false, x: spot.x, y: spot.y, f: 1, m: 0, room: 'town', alive: true };
   ws.player = p;
   players.set(p.id, p);
   send(p, { t: 'welcome', id: p.id, version: VERSION, world: WORLD, x: p.x, y: p.y, stars: stars, shop: { items: SHOP.ITEMS, levels: SHOP.LEVELS } });

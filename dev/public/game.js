@@ -11,6 +11,7 @@
   var FONT = "Fredoka, 'Baloo 2', 'Trebuchet MS', 'PingFang SC', 'Microsoft YaHei', sans-serif";
   var COLORS = ['#FF7A45', '#FF8FB8', '#5ED6C4', '#9B6BFF', '#FFC933', '#5AA9FF'];
   var HATS = ['None', 'Cap', 'Crown', 'Bow'];
+  var SKILLS = ['🐣 Little', '🧒 Big kid', '🧑 Grown-up'];     // who is playing: skill 0, 1, 2
   var EMOTES = ['❤️', '😂', '👋', '👍', '🎉', '😮'];
   var PALETTE = ['#1B2A49', '#FF4F6D', '#FF7A45', '#FFC933', '#4FA05A', '#3B82F6', '#9B6BFF', '#FF8FB8', '#7A4A2B', '#8A8F98'];
   var SIZES = [5, 12, 26];
@@ -127,8 +128,12 @@
     look.name = store('ft_name') || '';
     look.color = store('ft_color') || COLORS[0];
     look.hat = parseInt(store('ft_hat') || '0', 10) || 0;
-    look.big = store('ft_big') === '1';
-    $('nameIn').value = look.name; $('bigIn').checked = look.big;
+    // Who is playing: 0 little (about 6), 1 big kid (about 8), 2 grown-up. The games size their numbers and speed by it.
+    // A tablet that has never been asked has no choice yet (-1), unless it had "I am a grown-up" ticked before.
+    look.skill = parseInt(store('ft_skill'), 10);
+    if (!(look.skill >= 0 && look.skill <= 2)) look.skill = store('ft_big') === '1' ? 2 : -1;
+    look.big = look.skill === 2;
+    $('nameIn').value = look.name;
     var pc = $('preview').getContext('2d');
     function preview() {
       pc.clearRect(0, 0, 150, 170);
@@ -145,13 +150,21 @@
       b.onclick = function () { look.hat = i; [].forEach.call($('hats').children, function (x) { x.classList.toggle('on', x === b); }); preview(); };
       $('hats').appendChild(b);
     });
-    $('bigIn').onchange = function () { look.big = $('bigIn').checked; preview(); };
+    SKILLS.forEach(function (s, i) {
+      var b = document.createElement('button'); b.type = 'button'; b.className = 'chip' + (i === look.skill ? ' on' : ''); b.textContent = s;
+      b.onclick = function () {
+        look.skill = i; look.big = i === 2; $('joinErr').textContent = '';
+        [].forEach.call($('skills').children, function (x) { x.classList.toggle('on', x === b); }); preview();
+      };
+      $('skills').appendChild(b);
+    });
     preview();
     $('joinForm').addEventListener('submit', function (e) {
       e.preventDefault();
       look.name = $('nameIn').value.trim();
       if (!look.name) { $('joinErr').textContent = 'Please type your name.'; return; }
-      store('ft_name', look.name); store('ft_color', look.color); store('ft_hat', String(look.hat)); store('ft_big', look.big ? '1' : '0');
+      if (look.skill < 0) { $('joinErr').textContent = 'Tap who is playing: ' + SKILLS.join(', ') + '.'; return; }
+      store('ft_name', look.name); store('ft_color', look.color); store('ft_hat', String(look.hat)); store('ft_big', look.big ? '1' : '0'); store('ft_skill', String(look.skill));
       $('joinErr').textContent = ''; $('playBtn').disabled = true; $('playBtn').textContent = 'Joining…';
       connect();
     });
@@ -164,7 +177,7 @@
   function connect() {
     try { ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host); }
     catch (e) { joinFailed('Could not connect to the game.'); return; }
-    ws.onopen = function () { send({ t: 'join', name: look.name, color: look.color, hat: look.hat, big: look.big }); };
+    ws.onopen = function () { send({ t: 'join', name: look.name, color: look.color, hat: look.hat, big: look.big, skill: look.skill }); };
     ws.onmessage = function (ev) { var m; try { m = JSON.parse(ev.data); } catch (e) { return; } handle(m); };
     ws.onclose = function () {
       if (joined) { $('lost').hidden = false; setTimeout(connect, 2000); }
@@ -253,7 +266,7 @@
             p = players[d.id] = { x: world ? world.spawn.x : 0, y: world ? world.spawn.y : 0, tx: 0, ty: 0, f: 1, m: 0, placed: false };
             if (gotList && d.id !== me) fresh = true;
           }
-          p.id = d.id; p.name = d.name; p.color = d.color; p.hat = d.hat; p.big = d.big; p.stars = d.stars; p.room = d.room;
+          p.id = d.id; p.name = d.name; p.color = d.color; p.hat = d.hat; p.big = d.big; p.skill = d.skill; p.stars = d.stars; p.room = d.room;
           p.outfit = d.outfit; p.car = d.car; p.drive = d.drive; p.lv = d.lv || 0; p.ext = d.ext || {};
           seen[d.id] = 1;
         }
@@ -994,7 +1007,7 @@
     myId: function () { return me; },
     me: function () { return meState; },            // my own numbers: { stars, coins, lv, owned, quests } or null
     self: mine,                                     // my entry in players()
-    players: function () { return players; },       // id -> { id, name, color, hat, big, lv, room, outfit, car, ext }
+    players: function () { return players; },       // id -> { id, name, color, hat, big, skill, lv, room, outfit, car, ext }
     world: function () { return world; },
     room: function () { return room; },
     // go into the game's own room (hides the town and its buttons) and back out to the town
